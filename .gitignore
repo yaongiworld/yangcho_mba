@@ -42,3 +42,6 @@ data/cache/
 
 # Notebooks
 .ipynb_checkpoints/
+
+# OMC / gstack local state
+.omc/
