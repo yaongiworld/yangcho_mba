@@ -33,10 +33,7 @@ jobs:
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
-      REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
-      REDDIT_USER_AGENT: "llc-pipeline/0.1 (research; contact via repo)"
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       # GITHUB_SHA is auto-injected; pipeline.version reads it for prompt_version stamping.
 
     steps:
@@ -56,7 +53,7 @@ jobs:
       - name: Verify required secrets are set
         run: |
           missing=()
-          for var in ANTHROPIC_API_KEY SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY REDDIT_CLIENT_ID REDDIT_CLIENT_SECRET; do
+          for var in ANTHROPIC_API_KEY SUPABASE_URL SUPABASE_SECRET_KEY; do
             if [ -z "${!var}" ]; then
               missing+=("$var")
             fi

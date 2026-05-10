@@ -8,7 +8,7 @@
 --   • LG-primary, competitor mix (products.is_lg flag)
 --
 -- All tables are in the public schema. RLS is enabled on every table; the dashboard
--- uses the anon key for public reads, the cron uses the service-role key for writes,
+-- uses the publishable key for public reads, the cron uses the secret key for writes,
 -- and Yangcho's review-queue access is gated via Supabase Auth.
 
 ----------------------------------------------------------------------
@@ -16,7 +16,6 @@
 ----------------------------------------------------------------------
 
 CREATE TYPE pipeline_stage AS ENUM (
-    'ingest_reddit',
     'ingest_calendar',
     'ingest_tiktok',
     'extract_moments',
@@ -29,7 +28,7 @@ CREATE TYPE pipeline_stage AS ENUM (
 
 CREATE TYPE pipeline_status AS ENUM ('running', 'success', 'failure', 'partial');
 
-CREATE TYPE source_kind AS ENUM ('reddit', 'tiktok', 'calendar');
+CREATE TYPE source_kind AS ENUM ('tiktok', 'calendar');
 
 CREATE TYPE review_status AS ENUM ('pending', 'approved', 'rejected', 'retracted');
 
@@ -117,7 +116,7 @@ CREATE TABLE moments (
     id                BIGSERIAL PRIMARY KEY,
     moment_date       DATE NOT NULL,
     name              TEXT NOT NULL,
-    -- Where the signal came from (mostly TikTok hashtag, Reddit thread, calendar entry).
+    -- Where the signal came from (TikTok hashtag, calendar entry).
     source            source_kind NOT NULL,
     source_refs       JSONB NOT NULL DEFAULT '[]'::JSONB,
     description       TEXT,
