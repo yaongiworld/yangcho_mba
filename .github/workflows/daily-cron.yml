@@ -1,0 +1,93 @@
+name: Daily pipeline
+
+# Runs the LLC pipeline once per day at 06:00 KST = 21:00 UTC the previous day.
+# GitHub Actions cron is in UTC.
+#
+# Failure handling: any non-zero exit notifies operators via the (deferred) TODO P3
+# notification system. Until that ships, GitHub Actions' built-in failure email
+# to the repo owner is the fallback signal.
+
+on:
+  schedule:
+    - cron: "0 21 * * *"  # 21:00 UTC daily = 06:00 KST next day
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: "Run a single stage instead of the full pipeline"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  # If yesterday's run is still going when today's fires, skip today.
+  # Better to drop a run than to corrupt mid-flight state.
+  group: daily-pipeline
+  cancel-in-progress: false
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # async fan-out should complete in ~2 min; 30 is generous
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+      REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+      REDDIT_USER_AGENT: "llc-pipeline/0.1 (research; contact via repo)"
+      # GITHUB_SHA is auto-injected; pipeline.version reads it for prompt_version stamping.
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify required secrets are set
+        run: |
+          missing=()
+          for var in ANTHROPIC_API_KEY SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY REDDIT_CLIENT_ID REDDIT_CLIENT_SECRET; do
+            if [ -z "${!var}" ]; then
+              missing+=("$var")
+            fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::missing required secrets: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Install playwright browsers (TikTok scraper fallback)
+        run: uv run playwright install --with-deps chromium
+
+      - name: Run pipeline
+        id: pipeline
+        run: |
+          if [ -n "${{ github.event.inputs.stage }}" ]; then
+            uv run python -m pipeline.orchestrator.run --stage "${{ github.event.inputs.stage }}"
+          else
+            uv run python -m pipeline.orchestrator.run
+          fi
+
+      - name: Upload pipeline log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-log-${{ github.run_id }}
+          path: |
+            pipeline.log
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
