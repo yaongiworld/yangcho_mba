@@ -37,9 +37,9 @@ data/cache/
 *.parquet
 *.csv.gz
 
-# Supabase local dev
-supabase/.branches/
-supabase/.temp/
+# Supabase local dev — anywhere in the tree (root or under dashboard/)
+**/supabase/.branches/
+**/supabase/.temp/
 
 # Playwright artifacts
 playwright-report/
