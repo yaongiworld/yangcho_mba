@@ -184,15 +184,20 @@ def _payload_to_signals(payload: Any) -> list[RawSignal]:
     return out
 
 
-def fetch_tiktok_signals() -> list[RawSignal]:
+async def fetch_tiktok_signals() -> list[RawSignal]:
     """Public entrypoint. Fetch fresh; on failure, fall back to last-known-good.
+
+    Async because the orchestrator runs inside an asyncio event loop (the
+    friction analyzer fans out via asyncio.gather). The playwright client
+    is itself async, so we await it directly rather than spawning a nested
+    loop via asyncio.run().
 
     Always returns a list. Never raises — TikTok failure is the most expected
     failure mode in the whole system, so the caller sees it as "no signal
     today" and continues.
     """
     try:
-        payload = asyncio.run(_fetch_via_playwright())
+        payload = await _fetch_via_playwright()
         hashtags = _parse_hashtags(payload)
         if not hashtags:
             logger.warning("tiktok: payload captured but no hashtags parsed; trying cache")

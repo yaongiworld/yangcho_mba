@@ -72,12 +72,14 @@ def test_iron_rule_1_critical_failure_does_re_raise() -> None:
 
 def test_iron_rule_2_tiktok_failure_returns_empty_not_raises() -> None:
     """fetch_tiktok_signals must return [] when playwright cannot run."""
+    import asyncio
+    import os
+
     from pipeline.ingestion.tiktok import fetch_tiktok_signals
 
-    import os
     os.environ.pop("SUPABASE_URL", None)
 
-    result = fetch_tiktok_signals()
+    result = asyncio.run(fetch_tiktok_signals())
     assert result == [], "must return empty list, not raise"
 
 

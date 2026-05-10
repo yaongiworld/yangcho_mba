@@ -94,11 +94,11 @@ def stage_ingest_calendar() -> list[CalendarMoment]:
         return moments
 
 
-def stage_ingest_tiktok() -> list[RawSignal]:
+async def stage_ingest_tiktok() -> list[RawSignal]:
     """Most fragile source. swallow=True so an exception inside (e.g. playwright
     not installed) doesn't crash the daily run."""
     with record_stage(PipelineStage.INGEST_TIKTOK, swallow=True) as h:
-        signals = fetch_tiktok_signals()
+        signals = await fetch_tiktok_signals()
         h.items_processed = len(signals)
         h.items_succeeded = len(signals)
         return signals
@@ -340,7 +340,7 @@ async def run_daily(today: date_t | None = None) -> int:
 
     # Stage 1 — ingest.
     cal_moments = stage_ingest_calendar()
-    tiktok_signals = stage_ingest_tiktok()
+    tiktok_signals = await stage_ingest_tiktok()
     logger.info(
         "ingest: %d calendar moments, %d tiktok signals",
         len(cal_moments), len(tiktok_signals),
