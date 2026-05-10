@@ -1,0 +1,80 @@
+# Olive Young Global brand allowlist
+#
+# Pulled from /display/category/product-data/?ctgrNo=Skincare on 2026-05-11.
+# brand_no values are stable internal IDs; brand names may shift in casing/
+# punctuation as OY updates their site, so prefer brand_no for lookups.
+#
+# is_lg = true means LG H&H corporate ownership. Editorial decision:
+#   - PHYSIOGEL: LG H&H Korea-Asia license-acquired brand. Public.
+#   - CAREPLUS: LG H&H mass-market K-Beauty brand. Public.
+#   - BEYOND: LG H&H mid-tier K-Beauty brand. Public.
+#
+# Competitor brands we include for the "honest competitor mix" angle:
+# the top-volume indie K-Beauty brands on OY Global. Adding them keeps the
+# dashboard's competitive-recommendation surface meaningful (Yangcho's
+# friction analysis can match these honestly when they're a better fit
+# than any LG product).
+#
+# Format consumed by pipeline/ingestion/catalog.py and the brand-filter
+# logic in the orchestrator's product-matching step (W3+).
+
+version: 1
+last_reviewed: 2026-05-11
+
+# LG H&H brands carried on OY Global. is_lg=true.
+lg:
+  - brand_no: B00073
+    name: PHYSIOGEL
+    is_lg: true
+    note: "LG H&H Asia-Pacific license. Barrier-repair / dermatologically-tested heritage."
+
+  - brand_no: B00048
+    name: CAREPLUS
+    is_lg: true
+    note: "LG H&H mass-market skincare. Daily-use focus."
+
+  - brand_no: B00096
+    name: BEYOND
+    is_lg: true
+    note: "LG H&H mid-tier K-Beauty. Younger-skewing, ingredient-forward."
+
+# Top indie K-Beauty brands on OY Global. is_lg=false. Included for
+# competitive-mix matching; the dashboard can recommend these when
+# they're a better fit than any LG product.
+competitors:
+  - brand_no: B00202
+    name: "Dr.G"
+    is_lg: false
+  - brand_no: B00244
+    name: "ROUND LAB"
+    is_lg: false
+  - brand_no: B00168
+    name: "VT"
+    is_lg: false
+  - brand_no: B00399
+    name: "Anua"
+    is_lg: false
+  - brand_no: B00099
+    name: "BIOHEAL BOH"
+    is_lg: false
+  - brand_no: B00170
+    name: "ma:nyo"
+    is_lg: false
+  - brand_no: B00183
+    name: "BRINGGREEN"
+    is_lg: false
+  - brand_no: B00256
+    name: "Torriden"
+    is_lg: false
+  - brand_no: B00519
+    name: "INNISFREE"
+    is_lg: false
+  - brand_no: B00095
+    name: "COSRX"
+    is_lg: false
+  - brand_no: B00010
+    name: "CNP"
+    is_lg: false
+  - brand_no: B00132
+    name: "Abib"
+    is_lg: false

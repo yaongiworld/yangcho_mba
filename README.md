@@ -48,6 +48,19 @@ uv run pytest
 uv run ruff check pipeline/
 ```
 
+### Required environment variables
+
+Pipeline `.env` (NOT committed; pipeline-side only):
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...      # friction analysis, scoring, marketing posts
+GEMINI_API_KEY=...                # vision OCR for product catalog (Flash 2.5)
+SUPABASE_URL=https://<ref>.supabase.co
+SUPABASE_SECRET_KEY=sb_secret_... # bypasses RLS; never ship to client
+```
+
+Why two LLM providers: Claude handles reasoning (the moat), Gemini Flash 2.5 handles vision-OCR for product catalog images. Right tool for each job, ~10x cheaper for the OCR work.
+
 ### Dashboard
 
 See [`dashboard/README.md`](dashboard/README.md). Requires `npm install` + a Supabase project. Not done yet.

@@ -132,11 +132,13 @@ class SignalsCacheRow(SignalsCacheInsert):
 
 
 class ProductInsert(BaseModel):
+    external_id: str  # platform-specific ID (e.g. OY's prdtNo); UNIQUE per (platform, external_id)
     brand: str
     is_lg: bool = False
     name: str
     category: str | None = None
     public_url: str
+    platform: str = "oy_global"  # source provenance: oy_global, lg_brand_direct, etc.
     claims: list[str] = Field(default_factory=list)
     key_ingredients: list[str] = Field(default_factory=list)
     last_verified_at: datetime | None = None
