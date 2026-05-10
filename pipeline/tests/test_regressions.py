@@ -71,15 +71,31 @@ def test_iron_rule_1_critical_failure_does_re_raise() -> None:
 
 
 def test_iron_rule_2_tiktok_failure_returns_empty_not_raises() -> None:
-    """fetch_tiktok_signals must return [] when playwright cannot run."""
+    """fetch_tiktok_signals must return [] when scraping fails AND no cache exists.
+
+    Mocks the playwright fetch into raising — that's the failure we care
+    about (network down, TikTok blocking, schema change). The test asserts
+    that the orchestrator's contract is preserved: a TikTok scraper failure
+    becomes an empty list, never an exception.
+
+    We also kill SUPABASE_URL so the cache fallback returns None (no last-
+    known-good available). Both layers fail; result must still be [].
+    """
     import asyncio
     import os
 
-    from pipeline.ingestion.tiktok import fetch_tiktok_signals
+    from unittest.mock import patch
+
+    from pipeline.ingestion import tiktok as tiktok_mod
 
     os.environ.pop("SUPABASE_URL", None)
 
-    result = asyncio.run(fetch_tiktok_signals())
+    async def boom():
+        raise RuntimeError("simulated playwright failure")
+
+    with patch.object(tiktok_mod, "_fetch_via_playwright", side_effect=boom):
+        result = asyncio.run(tiktok_mod.fetch_tiktok_signals())
+
     assert result == [], "must return empty list, not raise"
 
 
