@@ -46,6 +46,11 @@ CREATIVE_CENTER_URL = (
 # Using a substring match (any URL containing this path) so version bumps don't break us.
 XHR_PATH_NEEDLE = "/creative_radar_api/v1/popular_trend/hashtag/list"
 
+# Region we ALWAYS want, regardless of where the playwright box geolocates.
+# TikTok's Creative Center localizes by IP unless you override the country_code
+# query param on the API call. We rewrite every matching XHR to force this.
+TARGET_COUNTRY_CODE = "US"
+
 # How long to wait after navigation for the XHR to fire and resolve.
 # 30s is generous; the page typically completes in 5–10s.
 XHR_WAIT_SECONDS = 30
@@ -56,8 +61,29 @@ USER_AGENT = (
 )
 
 
+def _force_us_country_code(url: str, country_code: str = TARGET_COUNTRY_CODE) -> str:
+    """Rewrite the country_code query param to TARGET_COUNTRY_CODE, preserving the rest of the URL.
+
+    The page mints all the auth/signature tokens client-side, then sends a request
+    to the Creative Center API with whatever country_code its locale logic picked.
+    Swapping just that one param keeps the signed payload valid (the params are
+    not part of the signature for this endpoint — confirmed empirically: rewriting
+    country_code does not produce a 40101 'no permission' rejection).
+    """
+    from urllib.parse import urlencode, urlparse, urlunparse, parse_qsl
+
+    parsed = urlparse(url)
+    params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    params["country_code"] = country_code
+    return urlunparse(parsed._replace(query=urlencode(params)))
+
+
 async def _fetch_via_playwright() -> dict[str, Any]:
     """Boot Chromium, navigate to Creative Center, intercept the trending XHR.
+
+    Forces country_code=US on the trending-hashtag XHR via page.route() so we
+    get US trends even when the playwright box geolocates elsewhere (e.g.,
+    when running locally from Korea or from a Korea-region GitHub Actions runner).
 
     Returns the parsed JSON payload from the API response. Raises on any
     failure — caller wraps in a try/except for graceful degradation.
@@ -77,6 +103,18 @@ async def _fetch_via_playwright() -> dict[str, Any]:
                 viewport={"width": 1280, "height": 900},
             )
             page = await context.new_page()
+
+            async def on_route(route, request):
+                """Rewrite outgoing trending-hashtag requests to force country_code=US."""
+                if XHR_PATH_NEEDLE in request.url:
+                    rewritten = _force_us_country_code(request.url)
+                    if rewritten != request.url:
+                        logger.debug("tiktok: rewrote URL → %s", rewritten)
+                    await route.continue_(url=rewritten)
+                else:
+                    await route.continue_()
+
+            await page.route("**/*", on_route)
 
             async def on_response(response):
                 nonlocal captured
