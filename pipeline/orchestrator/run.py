@@ -60,6 +60,7 @@ from datetime import date as date_t
 from typing import Any
 
 from pipeline.analysis.friction import analyze_friction
+from pipeline.analysis.match_product import match_one_friction
 from pipeline.db import supabase_client
 from pipeline.ingestion.calendar import moments_for as calendar_moments_for
 from pipeline.ingestion.tiktok import fetch_tiktok_signals
@@ -264,13 +265,24 @@ async def stage_analyze_friction(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def stage_persist(
+async def stage_persist(
     today: date_t,
     results: list[tuple[ExtractedMoment, FrictionAnalysis | None]],
 ) -> None:
-    """Write moments and their frictions to Supabase. Single batch; partial
-    failures inside the batch don't corrupt earlier successful writes
-    because each table-level call is atomic in PostgREST."""
+    """Write moments + frictions + product matches to Supabase.
+
+    Order per moment:
+      1. Insert the moment row.
+      2. For each friction: insert friction row, set review_status from the
+         confidence gate (self_rating >= 8 = 'approved', else 'pending').
+      3. ONLY for approved frictions: run product matching, insert top-3
+         matches into the matches table.
+
+    The matching restriction to approved frictions is a deliberate cost
+    control: low-confidence frictions queue for Yangcho's review and may
+    be rejected, so spending LLM tokens on their product matches is wasted
+    work. After Yangcho approves, a separate flow can backfill matches.
+    """
     with record_stage(PipelineStage.APPLY_CONFIDENCE_GATE) as h:
         h.items_processed = len(results)
 
@@ -311,7 +323,7 @@ def stage_persist(
                 if analysis is not None:
                     review_status = "approved" if analysis.self_rating >= 8 else "pending"
                     for f in analysis.frictions:
-                        client.table("frictions").insert({
+                        friction_resp = client.table("frictions").insert({
                             "moment_id": moment_id,
                             "friction_summary": f.summary,
                             "mechanism": f.mechanism,
@@ -320,12 +332,56 @@ def stage_persist(
                             "review_status": review_status,
                             "prompt_version": version,
                         }).execute()
+                        if not friction_resp.data:
+                            continue
+                        friction_id = friction_resp.data[0]["id"]
+
+                        # Run product matching ONLY for approved (auto-published) frictions.
+                        if review_status == "approved":
+                            await _persist_matches_for_friction(
+                                client, friction_id, f, version
+                            )
                 succeeded += 1
             except Exception as exc:
                 # One moment's persist failure must not abort the rest. Log and continue.
                 logger.warning("persist: failed for moment %r: %s", moment.name, exc)
 
         h.items_succeeded = succeeded
+
+
+async def _persist_matches_for_friction(
+    client,
+    friction_id: int,
+    friction,
+    version: str,
+) -> None:
+    """Run product matching for one approved friction and insert its top
+    matches. Failures here MUST NOT abort the parent stage."""
+    try:
+        matches = await match_one_friction(friction)
+    except Exception as exc:
+        logger.warning("persist: match_one_friction failed for friction_id=%d: %s",
+                       friction_id, exc)
+        return
+
+    if not matches:
+        return
+
+    for rank, m in enumerate(matches, start=1):
+        try:
+            client.table("matches").insert({
+                "friction_id": friction_id,
+                "product_id": m.product_id,
+                "match_score": float(m.match_score),
+                "rank": rank,
+                "scientific_argument": m.scientific_argument,
+                "prompt_version": version,
+            }).execute()
+        except Exception as exc:
+            logger.warning(
+                "persist: match insert failed (friction=%d product=%d): %s",
+                friction_id, m.product_id, exc,
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -358,7 +414,7 @@ async def run_daily(today: date_t | None = None) -> int:
     results = await stage_analyze_friction(moments)
 
     # Stage 5 — persist.
-    stage_persist(today, results)
+    await stage_persist(today, results)
 
     last = last_successful_run_at()
     logger.info("=== LLC pipeline done. Last successful run: %s ===", last)
