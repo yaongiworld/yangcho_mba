@@ -5,15 +5,15 @@ runnable locally via `uv run python -m pipeline.orchestrator.run`.
 
 Flow:
 
-    ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-    │ INGEST_CALENDAR  │  │ INGEST_REDDIT    │  │ INGEST_TIKTOK    │
-    │ always succeeds  │  │ graceful empty   │  │ graceful empty   │
-    │                  │  │                  │  │ (swallow=True)   │
-    └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘
-             │                     │                     │
-             └─────────────────────┴─────────────────────┘
-                                   │
-                                   ▼
+    ┌──────────────────┐  ┌──────────────────┐
+    │ INGEST_CALENDAR  │  │ INGEST_TIKTOK    │
+    │ always succeeds  │  │ graceful empty   │
+    │                  │  │ (swallow=True)   │
+    └────────┬─────────┘  └────────┬─────────┘
+             │                     │
+             └─────────────────────┘
+                       │
+                       ▼
                           ┌────────────────────┐
                           │ EXTRACT_MOMENTS    │
                           │ v1: keyword group  │
@@ -62,7 +62,6 @@ from typing import Any
 from pipeline.analysis.friction import analyze_friction
 from pipeline.db import supabase_client
 from pipeline.ingestion.calendar import moments_for as calendar_moments_for
-from pipeline.ingestion.reddit import fetch_reddit_signals
 from pipeline.ingestion.tiktok import fetch_tiktok_signals
 from pipeline.observability import last_successful_run_at, record_stage
 from pipeline.schemas import (
@@ -93,15 +92,6 @@ def stage_ingest_calendar() -> list[CalendarMoment]:
         h.items_processed = len(moments)
         h.items_succeeded = len(moments)
         return moments
-
-
-def stage_ingest_reddit() -> list[RawSignal]:
-    """Graceful: returns [] on any failure (logged inside fetch_reddit_signals)."""
-    with record_stage(PipelineStage.INGEST_REDDIT) as h:
-        signals = fetch_reddit_signals()
-        h.items_processed = len(signals)
-        h.items_succeeded = len(signals)
-        return signals
 
 
 def stage_ingest_tiktok() -> list[RawSignal]:
@@ -145,7 +135,7 @@ def _attach_signals_to_calendar(
     cal_moments: list[CalendarMoment],
     signals: list[RawSignal],
 ) -> tuple[list[ExtractedMoment], list[RawSignal]]:
-    """Attach Reddit/TikTok signals to calendar moments via keyword overlap.
+    """Attach TikTok signals to calendar moments via keyword overlap.
     Returns (moments, leftover_signals)."""
     moments: list[ExtractedMoment] = []
     used_signal_ids: set[str] = set()
@@ -196,18 +186,16 @@ def _moments_from_tiktok_hashtags(signals: list[RawSignal]) -> list[ExtractedMom
 
 def stage_extract_moments(
     cal_moments: list[CalendarMoment],
-    reddit_signals: list[RawSignal],
     tiktok_signals: list[RawSignal],
 ) -> list[ExtractedMoment]:
     """Group raw inputs into moments. v1 grouping; LLM clustering replaces this in W3+."""
     with record_stage(PipelineStage.EXTRACT_MOMENTS) as h:
-        # v1: Reddit signals attach to calendar moments by keyword. Leftover Reddit
-        # signals are dropped (they didn't match any known moment). TikTok hashtags
-        # always surface as their own moments since "trending hashtag" IS the moment.
-        moments, _leftover_reddit = _attach_signals_to_calendar(
-            cal_moments, reddit_signals
-        )
-        moments.extend(_moments_from_tiktok_hashtags(tiktok_signals))
+        # v1: TikTok signals attach to calendar moments by keyword overlap when
+        # the hashtag mentions a known cultural moment. TikTok hashtags that
+        # don't match a calendar entry surface as their own standalone moments.
+        moments, _leftover = _attach_signals_to_calendar(cal_moments, tiktok_signals)
+        # Add the leftover TikTok hashtags as standalone moments.
+        moments.extend(_moments_from_tiktok_hashtags(_leftover))
 
         h.items_processed = len(moments)
         h.items_succeeded = len(moments)
@@ -221,7 +209,7 @@ def stage_extract_moments(
 
 def stage_score_moments(moments: list[ExtractedMoment]) -> list[ExtractedMoment]:
     """v1: rank by signal volume. Calendar high-confidence entries get a small
-    bonus so they don't get drowned out by noisy Reddit clusters.
+    bonus so they don't get drowned out by low-volume TikTok hashtags.
 
     Real LLM scoring lands in W3+ — call_llm("scoring", ...) returns
     purchase_intent + brand_risk; trend_velocity comes from rolling-window
@@ -352,22 +340,20 @@ async def run_daily(today: date_t | None = None) -> int:
 
     # Stage 1 — ingest.
     cal_moments = stage_ingest_calendar()
-    reddit_signals = stage_ingest_reddit()
     tiktok_signals = stage_ingest_tiktok()
     logger.info(
-        "ingest: %d calendar moments, %d reddit signals, %d tiktok signals",
-        len(cal_moments), len(reddit_signals), len(tiktok_signals),
+        "ingest: %d calendar moments, %d tiktok signals",
+        len(cal_moments), len(tiktok_signals),
     )
 
-    # Hard floor: if ALL three ingestion sources returned empty, there's
-    # nothing to do today. Log + exit cleanly. Calendar should never be empty
-    # in practice unless the YAML is broken.
-    if not cal_moments and not reddit_signals and not tiktok_signals:
+    # Hard floor: if both sources returned empty, there's nothing to do today.
+    # Calendar should never be empty in practice unless the YAML is broken.
+    if not cal_moments and not tiktok_signals:
         logger.warning("ingest: all sources empty; nothing to publish today")
         return 0
 
     # Stages 2–4.
-    moments = stage_extract_moments(cal_moments, reddit_signals, tiktok_signals)
+    moments = stage_extract_moments(cal_moments, tiktok_signals)
     moments = stage_score_moments(moments)
     results = await stage_analyze_friction(moments)
 

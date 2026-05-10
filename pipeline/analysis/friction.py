@@ -48,9 +48,9 @@ def _hero_cases() -> tuple[str, str, str]:
 def _format_signal_sample(signals: list[RawSignal]) -> str:
     """Render up to N signals as a compact bulleted list for the prompt.
 
-    Trims long bodies — the LLM doesn't need the full Reddit thread, just enough
-    to grok the friction. ~280 chars per signal is the Twitter-era sweet spot for
-    "enough to understand without bloating the prompt."
+    Trims long bodies — the LLM doesn't need the full source content, just
+    enough to grok the friction. ~280 chars per signal is the Twitter-era sweet
+    spot for "enough to understand without bloating the prompt."
     """
     lines: list[str] = []
     for s in signals[:SIGNAL_SAMPLE_SIZE]:

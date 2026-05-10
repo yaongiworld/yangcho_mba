@@ -54,9 +54,9 @@ Deferred work captured during planning. Each entry has enough context that picki
 
 **Cons:** $30–60/month extra. Tony explicitly preferred no paid services during /plan-eng-review. Requires external account.
 
-**Context:** Skipped during /plan-eng-review on 2026-05-09. The graceful-degradation design (Reddit + cultural calendar always-on, TikTok value-add) handles fragility on day 1.
+**Context:** Skipped during /plan-eng-review on 2026-05-09. The pipeline pivoted to TikTok-only sourcing (cultural calendar always-on as the floor); paid scraping was further deemed unnecessary.
 
-**Revisit when:** TikTok playwright scraping fails 5+ days in a row during the first 4 weeks AND the cultural calendar + Reddit pair feels too thin without it AND budget allows.
+**Revisit when:** TikTok playwright scraping fails 5+ days in a row during the first 4 weeks AND the cultural calendar feels too thin on its own AND budget allows.
 
 **Effort:** XS (account setup + API key + replace playwright module).
 

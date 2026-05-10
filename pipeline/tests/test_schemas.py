@@ -92,7 +92,7 @@ def test_moment_insert_purchase_intent_bounds() -> None:
     MomentInsert(
         moment_date=datetime.now(timezone.utc).date(),
         name="x",
-        source=SourceKind.REDDIT,
+        source=SourceKind.TIKTOK,
         purchase_intent=3,
         prompt_version="abc",
     )
@@ -101,7 +101,7 @@ def test_moment_insert_purchase_intent_bounds() -> None:
         MomentInsert(
             moment_date=datetime.now(timezone.utc).date(),
             name="x",
-            source=SourceKind.REDDIT,
+            source=SourceKind.TIKTOK,
             purchase_intent=6,
             prompt_version="abc",
         )

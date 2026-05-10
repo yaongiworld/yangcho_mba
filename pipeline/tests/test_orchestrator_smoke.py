@@ -26,8 +26,9 @@ from pipeline.schemas import (
 
 
 def test_extract_moments_groups_calendar_and_tiktok() -> None:
-    """Calendar moments + TikTok hashtags both surface; Reddit signals attach
-    to calendar moments via keyword overlap."""
+    """Calendar moments and TikTok hashtags both surface; TikTok hashtags
+    matching a calendar moment's keywords attach to it; non-matching
+    TikTok hashtags become standalone moments."""
     cal = [
         CalendarMoment(
             name="Sunday Tailgate",
@@ -38,35 +39,35 @@ def test_extract_moments_groups_calendar_and_tiktok() -> None:
             category="nfl",
         ),
     ]
-    reddit = [
-        RawSignal(
-            source=SourceKind.REDDIT,
-            external_id="r1",
-            text="My SPF pilled at the tailgate after 4 hours",
-            metadata={},
-        ),
-    ]
     tiktok = [
+        # Matches the "tailgate" keyword on Sunday Tailgate
         RawSignal(
             source=SourceKind.TIKTOK,
             external_id="t1",
+            text="#tailgateprep",
+            metadata={"hashtag": "tailgateprep", "volume": 8000, "rank": 2},
+        ),
+        # Doesn't match any calendar keyword — should become a standalone moment
+        RawSignal(
+            source=SourceKind.TIKTOK,
+            external_id="t2",
             text="#bamarush",
             metadata={"hashtag": "bamarush", "volume": 5000, "rank": 3},
         ),
     ]
 
-    moments = stage_extract_moments(cal, reddit, tiktok)
+    moments = stage_extract_moments(cal, tiktok)
 
-    # Expect: 1 calendar moment (Sunday Tailgate, with the Reddit signal attached)
-    #         + 1 TikTok hashtag moment
+    # Expect: 1 calendar moment (Sunday Tailgate, with t1 attached)
+    #         + 1 standalone TikTok moment (#bamarush, didn't match)
     assert len(moments) == 2
     tailgate = next(m for m in moments if "Tailgate" in m.name)
     assert len(tailgate.signals) == 1
-    assert tailgate.signals[0].external_id == "r1"
+    assert tailgate.signals[0].external_id == "t1"
 
     bamarush = next(m for m in moments if "bamarush" in m.name)
     assert len(bamarush.signals) == 1
-    assert bamarush.signals[0].external_id == "t1"
+    assert bamarush.signals[0].external_id == "t2"
 
 
 def test_score_moments_ranks_higher_confidence_above_lower() -> None:
@@ -96,7 +97,7 @@ def test_score_moments_ranks_higher_confidence_above_lower() -> None:
             description="",
             source=SourceKind.CALENDAR,
             signals=[
-                RawSignal(source=SourceKind.REDDIT, external_id="r1", text="y", metadata={})
+                RawSignal(source=SourceKind.TIKTOK, external_id="t2", text="y", metadata={})
             ],
             calendar_entry=cal_high,
         ),

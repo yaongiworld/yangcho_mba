@@ -25,7 +25,6 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class PipelineStage(str, Enum):
-    INGEST_REDDIT = "ingest_reddit"
     INGEST_CALENDAR = "ingest_calendar"
     INGEST_TIKTOK = "ingest_tiktok"
     EXTRACT_MOMENTS = "extract_moments"
@@ -44,7 +43,6 @@ class PipelineStatus(str, Enum):
 
 
 class SourceKind(str, Enum):
-    REDDIT = "reddit"
     TIKTOK = "tiktok"
     CALENDAR = "calendar"
 
@@ -68,7 +66,7 @@ class PlaybookKind(str, Enum):
 
 
 class RawSignal(BaseModel):
-    """One unit of input from any ingestion source. Reddit posts, TikTok hashtags,
+    """One unit of input from any ingestion source. TikTok hashtags and
     calendar moments all normalize to this shape before clustering."""
 
     source: SourceKind

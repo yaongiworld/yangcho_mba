@@ -1,7 +1,7 @@
 # Cultural Calendar — always-on lifestyle moments
 #
 # Pure data, no R&D required. Used by pipeline/ingestion/calendar.py to inject
-# moments into the daily run regardless of whether TikTok and Reddit produce
+# moments into the daily run regardless of whether TikTok produces
 # usable signal. This is the "graceful degradation" floor — the dashboard
 # always has SOMETHING to talk about.
 #

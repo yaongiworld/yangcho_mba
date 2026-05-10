@@ -33,25 +33,25 @@ def test_iron_rule_1_partial_failure_does_not_propagate_when_swallowed() -> None
     """
     completed_stages: list[str] = []
 
-    # Stage A: succeeds (Reddit-equivalent)
-    with record_stage(PipelineStage.INGEST_REDDIT) as h:
+    # Stage A: succeeds (calendar — always-on)
+    with record_stage(PipelineStage.INGEST_CALENDAR) as h:
         h.items_processed = 5
         h.items_succeeded = 5
-        completed_stages.append("reddit")
+        completed_stages.append("calendar")
 
-    # Stage B: fails but is swallowed (TikTok-equivalent)
+    # Stage B: fails but is swallowed (TikTok)
     with record_stage(PipelineStage.INGEST_TIKTOK, swallow=True) as h:
         completed_stages.append("tiktok-started")
         raise RuntimeError("playwright cannot reach TikTok")
     completed_stages.append("tiktok-after-block")  # we DO reach this — exception swallowed
 
-    # Stage C: must still execute (ANALYZE_FRICTION-equivalent)
+    # Stage C: must still execute (ANALYZE_FRICTION)
     with record_stage(PipelineStage.ANALYZE_FRICTION) as h:
         h.items_processed = 3
         h.items_succeeded = 3
         completed_stages.append("friction")
 
-    assert completed_stages == ["reddit", "tiktok-started", "tiktok-after-block", "friction"]
+    assert completed_stages == ["calendar", "tiktok-started", "tiktok-after-block", "friction"]
 
 
 def test_iron_rule_1_critical_failure_does_re_raise() -> None:
@@ -68,26 +68,6 @@ def test_iron_rule_1_critical_failure_does_re_raise() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # IRON RULE 2: Scraper failure → graceful degradation
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-def test_iron_rule_2_reddit_failure_returns_empty_not_raises() -> None:
-    """fetch_reddit_signals must return [] on auth failure, not raise.
-
-    The orchestrator counts on this: an empty list is "today Reddit had nothing
-    to say"; an exception would crash the run.
-    """
-    from pipeline.ingestion.reddit import fetch_reddit_signals
-
-    # No env vars → PRAW fails to construct → fall through to empty cache → empty list.
-    with patch.dict("os.environ", {}, clear=False):
-        # ensure REDDIT_CLIENT_ID is not set
-        import os
-        os.environ.pop("REDDIT_CLIENT_ID", None)
-        os.environ.pop("REDDIT_CLIENT_SECRET", None)
-        os.environ.pop("SUPABASE_URL", None)
-
-        result = fetch_reddit_signals()
-        assert result == [], "must return empty list, not raise"
 
 
 def test_iron_rule_2_tiktok_failure_returns_empty_not_raises() -> None:

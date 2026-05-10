@@ -9,7 +9,7 @@ See [`CLAUDE.md`](CLAUDE.md) for project context and the active design doc at `~
 ```
 llc/
 ├── pipeline/              # Python pipeline (uv-managed, Python 3.14)
-│   ├── ingestion/         # Reddit + cultural calendar + TikTok scrapers
+│   ├── ingestion/         # cultural calendar + TikTok scraper
 │   ├── analysis/          # moments, scoring, friction, product matching
 │   ├── playbook/          # influencer + marketing post + new product idea
 │   ├── orchestrator/      # daily cron entrypoint

@@ -15,17 +15,6 @@ from pipeline.schemas import RawSignal, SourceKind
 
 
 @pytest.fixture
-def reddit_signal() -> RawSignal:
-    return RawSignal(
-        source=SourceKind.REDDIT,
-        external_id="reddit:SkincareAddiction:test1",
-        text="Help! My new sunscreen is pilling under makeup at the tailgate",
-        created_at=datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc),
-        metadata={"subreddit": "SkincareAddiction"},
-    )
-
-
-@pytest.fixture
 def tiktok_signal() -> RawSignal:
     return RawSignal(
         source=SourceKind.TIKTOK,

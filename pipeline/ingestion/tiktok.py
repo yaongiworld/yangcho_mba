@@ -8,8 +8,8 @@ makes when listing trending hashtags.
 
 This module is the most fragile in the whole pipeline. The architecture from
 /plan-eng-review Issue 1 absorbs the fragility:
-  - Reddit + cultural calendar are always-on; if TikTok dies, the dashboard
-    keeps running.
+  - The cultural calendar is always-on; if TikTok dies, the dashboard keeps
+    running with calendar moments only.
   - On any failure, falls back to last-known-good cache.
   - record_stage(swallow=True) at the orchestrator level prevents a TikTok
     failure from aborting the daily run.

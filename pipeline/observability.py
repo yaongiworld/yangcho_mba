@@ -10,8 +10,8 @@ Usage:
     from pipeline.observability import record_stage
     from pipeline.schemas import PipelineStage
 
-    with record_stage(PipelineStage.INGEST_REDDIT) as run:
-        items = fetch_reddit()
+    with record_stage(PipelineStage.INGEST_TIKTOK) as run:
+        items = fetch_tiktok_signals()
         run.items_processed = len(items)
         run.items_succeeded = len(items)
 

@@ -47,13 +47,13 @@ This is a deliberately scraping-resistant pipeline. You can't reproduce it from 
 2. Visit the public landing page once per day; let it mint cookies.
 3. Use `page.route()` to intercept the XHR the UI makes when listing trending hashtags. Capture the response JSON.
 4. Cache the response in `signals_cache` for graceful-degradation reuse.
-5. On a fresh failure (anti-bot block, network timeout, schema change), the orchestrator already falls back to Reddit + cultural calendar per the design doc.
+5. On a fresh failure (anti-bot block, network timeout, schema change), the orchestrator already falls back to the cultural calendar per the design doc.
 
 Estimated W3 implementation effort: 1 day (4 hours playwright setup + 2 hours intercepting the XHR + 1 hour caching + 1 hour error handling).
 
 ## Risks (carry into W3)
 
-- **Anti-bot detection.** TikTok rotates fingerprinting checks. A scraper that works in W3 may stop working in W6. The graceful-degradation primitive absorbs this — if TikTok dies, the dashboard keeps shipping content from Reddit + calendar.
+- **Anti-bot detection.** TikTok rotates fingerprinting checks. A scraper that works in W3 may stop working in W6. The graceful-degradation primitive absorbs this — if TikTok dies, the dashboard keeps shipping content from the cultural calendar.
 - **No SLA, no contract.** Public TikTok data is fair game for personal/research use, but their ToS forbids automated scraping. We mitigate by:
   - Single daily fetch, identified user agent, rate-limited (1 req/min while session is active).
   - No re-publishing of TikTok content verbatim — we read trending hashtag *names* and *volumes*, not user video content.
@@ -63,11 +63,10 @@ Estimated W3 implementation effort: 1 day (4 hours playwright setup + 2 hours in
 
 ## Decision
 
-**Keep TikTok in the plan as a value-add source, not a primary.** This matches the /plan-eng-review Issue 1 outcome: graceful degradation as architectural primitive, multi-source ingestion, Reddit + cultural calendar always-on.
+**Keep TikTok as a value-add source on top of the always-on cultural calendar.** Updated 2026-05-10: Reddit ingestion was scoped out of the W1 build at the user's direction. Sources are now cultural calendar (always-on) + TikTok (graceful via playwright).
 
 W3 implementation order:
 1. Cultural calendar reader (already shipped — `data/calendar.yaml` parses cleanly with 18 entries).
-2. Reddit ingestion via PRAW (most reliable, well-known API).
-3. TikTok via playwright (last and most fragile).
+2. TikTok via playwright XHR interception (the only realtime signal source).
 
 If TikTok playwright proves unworkable after a 1-day spike during W3, fall back to: monitor public TikTok hashtag pages directly (`https://www.tiktok.com/tag/{hashtag}`) and infer trends from there. Worse signal but more reliable.

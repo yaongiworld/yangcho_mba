@@ -53,7 +53,7 @@ def cache_get_fresh(
 ) -> dict[str, Any] | list[Any] | None:
     """Return the latest cached payload IF it's fresher than `fresh_hours` ago.
 
-    Used to skip redundant work — if Reddit was fetched 2h ago and we're rate-
+    Used to skip redundant work — if TikTok was fetched 2h ago and we're rate-
     limited or just want to save API calls, return the cached version.
     """
     try:
