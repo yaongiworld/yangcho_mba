@@ -12,6 +12,16 @@ env/
 .mypy_cache/
 .ruff_cache/
 
+# Node / Next.js
+node_modules/
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+next-env.d.ts
+.turbo/
+
 # Environment / secrets
 .env
 .env.*
@@ -26,9 +36,15 @@ data/raw/
 data/cache/
 *.parquet
 *.csv.gz
-*.db-journal
-*.db-wal
-*.db-shm
+
+# Supabase local dev
+supabase/.branches/
+supabase/.temp/
+
+# Playwright artifacts
+playwright-report/
+test-results/
+.playwright/
 
 # OS / editor
 .DS_Store
@@ -36,9 +52,6 @@ data/cache/
 .idea/
 *.swp
 *.swo
-
-# Streamlit
-.streamlit/secrets.toml
 
 # Notebooks
 .ipynb_checkpoints/

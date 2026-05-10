@@ -1,51 +1,120 @@
-# yangcho_mba
+# LLC — The Logic of Life-Care
 
-Personal project supporting **Yangcho's** MBA application to US programs. Lives inside the Yaongiworld workspace; the root [`../CLAUDE.md`](../CLAUDE.md) sets the broader philosophy ("yaongis are yaongis", two-user scale, privacy-first, durable tech).
+Yangcho's MBA portfolio project. A daily-updating AI dashboard that translates K-Beauty into American mainstream lifestyle science. Lives inside the Yaongiworld workspace; the root [`../CLAUDE.md`](../CLAUDE.md) sets the broader philosophy.
+
+> **Note on history.** This repo's GitHub remote is still `yaongiworld/yangcho_mba` and the `.git` history starts under that name. The project pivoted from "White Space Miner" (K-Beauty formulation gap discovery) to LLC on 2026-05-09. The pivot is documented in commits and in the active design doc at `~/.gstack/projects/yaongiworld/tony-unknown-design-20260509-024916.md`.
 
 ## What this project is
 
 Two parallel tracks:
 
-1. **Application strategy** — recommendation plan, essay framing, resume phrasing, CEP narrative. See [`MBA_Preparation_Strategy_Candle.md`](MBA_Preparation_Strategy_Candle.md). Bilingual (KO/EN), Korean-first.
-2. **Portfolio project: White Space Miner** — an AI-powered tool that mines US consumer complaint data to surface K-Beauty formulation gaps and auto-generates product concept briefs. Full design in [`design.md`](design.md).
-   - The killer feature is the **formulation science translation layer**: sentiment → formulation root cause → K-Beauty solution → product brief. The moat is Yangcho's R&D chemistry expertise encoded as a curated knowledge base.
-   - Stack: Python, Streamlit, Claude/GPT API, SQLite. Hosted on Streamlit Cloud (free tier).
+1. **Application strategy** — recommendation plan, essay framing, resume phrasing, CEP narrative. See [`MBA_Preparation_Strategy_Candle.md`](MBA_Preparation_Strategy_Candle.md). Carried forward from White Space Miner; still valid for LLC.
+2. **Portfolio project: LLC** — daily-updating dashboard with three connected surfaces:
+   - **Live Trend Radar** — top 10 trending US lifestyle moments (TikTok + Reddit + cultural calendar), scored by Trend Velocity × Purchase Intent − Brand Risk.
+   - **Friction-to-Product Match** — per moment, the AI extracts environmental/behavioral frictions and matches a K-Beauty product (LG H&H primary, competitor mix), with an AI-generated scientific argument.
+   - **Marketing Playbook** — per match: an influencer suggestion, an auto-generated English marketing post (mainstream-American voice, not K-Beauty cultural voice), and a new-product-idea brief if no existing match fits.
+
+## The thesis
+
+K-Beauty enters the US wrapped in culture (cute packaging, glass skin aesthetic, Korean trends). That ceiling is real. LLC replaces the cultural wrapper with American mainstream lifestyle science. **Same K-Beauty products, different pitch.** The moat is the AI-generated *translation* between cultural and scientific positioning — not the products themselves, and not a closed knowledge base.
+
+## The dual-track moat
+
+- **Track 1 (defensibility):** Yangcho hand-writes 3 hero case studies for the public Methodology Showcase page. First person, defendable cold in any interview.
+- **Track 2 (freshness):** Every other trending keyword gets an AI-generated friction analysis using the 3 hero cases as in-context exemplars. The AI mimics Yangcho's reasoning voice by analogy. Outputs are confidence-gated: high-confidence entries auto-publish, low-confidence ones queue for Yangcho's review (~5–10/day during MBA crunch).
+
+Interview-killer line: *"The 3 case studies are mine. Everything else is the AI extending my reasoning to new trends, with me reviewing every entry before it goes live. The AI doesn't replace the expertise — it scales it."*
 
 ## People & roles
 
-- **Yangcho** — product owner, R&D/formulation expertise, owns the formulation knowledge base, reviews all auto-generated briefs.
-- **Towee** (Tony) — CTO, owns engineering execution. Yangcho cannot touch implementation directly without raising suspicion at her employer.
+- **Yangcho** — product owner, R&D/formulation expertise, owns the 3 hero case studies, owns the daily review queue. Cannot touch implementation directly.
+- **Towee** (Tony) — CTO, owns engineering execution. Commits and pushes happen on his account.
 
 ## Operating constraints
 
-- **Secrecy.** Yangcho is preparing applications without her employer's knowledge. **No proprietary company data, formulas, or internal IP** can ever be referenced or stored in this repo. Public sources only (Amazon reviews via Hugging Face, Reddit via PRAW, public social media, public ingredient databases).
-- **Timeline.** Core build: 5–6 weekends. Buffer: 2 weekends. All before MBA application deadlines.
-- **Budget.** Minimal — Claude/GPT API (~$30–50/mo), Streamlit Cloud free tier, SQLite.
-- **Audience.** MBA admissions committees (non-technical reviewers + technical interviewers). Optimize for *quality of insight* over breadth of data. 2–3 hero case studies > feature-complete platform.
+- **Discretion.** Yangcho is preparing applications without her employer's knowledge. **No proprietary company data, formulas, internal codenames, ingredient codes, or NDA-covered terms** can appear in this repo. The repo is private; editorial review is the line of defense — Yangcho reviews everything generated by the pipeline before it goes public, and Tony reviews any commit that touches employer-context content.
+- **Public sources only.** TikTok public content, Reddit public posts, public LG H&H + competitor product pages, public ingredient databases.
+- **LG visibility.** LG H&H products appear by name as primary matches, mixed with competitor K-Beauty brands. Competitor recommendations when LG lacks fit read as scientific integrity.
+- **Timeline.** 8 weekends, no buffer, before MBA application deadlines.
+- **Budget.** ~$50–80/month: Anthropic API, Vercel free tier, Supabase free tier. No paid scraping services.
+- **Audience.** US MBA admissions readers (non-technical) first, MBA interviewers (could be technical) second. Optimize for narrative within 30 seconds; technical depth is one click away.
 
-## Architecture (planned)
+## Architecture
 
 ```
-Data ingestion (weekly: Amazon Reviews + Reddit/PRAW)
-  → Complaint clustering (embeddings + HDBSCAN)
-  → Formulation Knowledge Base (RAG, hand-curated 50–80 entries)
-  → Auto-Brief Generator (Claude/GPT + RAG, Confidence Score)
-  → Streamlit Dashboard (Cluster Explorer, Briefs, Hero Cases, Discovery Timeline)
+DAILY CRON (06:00 KST, GitHub Actions)
+  ├── Reddit (PRAW) — always-on
+  ├── Cultural calendar (data/calendar.yaml) — always-on, deterministic
+  └── TikTok (Creative Center API + playwright fallback) — value-add
+       │
+       ▼
+  Lifestyle moment extraction & scoring (LLM)
+       │
+       ▼
+  Friction analysis (LLM, anchored by 3 hero cases) → AI self-rating 1–10
+       │
+       ▼
+  Product matching (RAG over scraped LG + competitor catalog)
+       │
+       ▼
+  Marketing playbook (LLM): influencer + post + new-product idea
+       │
+       ▼
+  Confidence gate: ≥8 → auto-publish; <8 → queue for Yangcho
+       │
+       ▼
+  Supabase (Postgres) ← pipeline_runs table records every stage
+       │
+       ▼
+  Next.js dashboard on Vercel (4 pages):
+    /            Hero Story Layer (today's top moment, full chain)
+    /trends      Trend Radar (top 10 scored moments)
+    /brief/[id]  Brief Detail (full chain + 3 playbook outputs)
+    /methodology Methodology Showcase (3 hero case studies + scoring + last run)
 ```
 
-The weekly pipeline runs as cron on a personal machine or GitHub Actions — **not** on Streamlit Cloud. Streamlit Cloud only hosts the dashboard.
+**Graceful degradation is an architectural primitive.** Every ingestion source has last-known-good caching. If TikTok dies, Reddit + cultural calendar still produce a daily brief. Dashboard surfaces a "Data refresh delayed" banner if `pipeline_runs.last_success` exceeds 24h. Pipeline never crashes the dashboard.
+
+## Tech stack
+
+- **Pipeline:** Python 3.12, uv for dependency management, Anthropic SDK (max_retries=3), PRAW, playwright (TikTok fallback), pytest.
+- **Dashboard:** Next.js 15 (App Router), Tailwind 4, Recharts (dynamic-imported on /trends only), Supabase JS client.
+- **Database:** Supabase Postgres + Auth (review queue gate). Generated TypeScript types via `supabase gen types typescript`. Pydantic models mirror the schema in Python.
+- **Infra:** Vercel (dashboard), GitHub Actions (daily cron), GitHub repo `yaongiworld/yangcho_mba` (private).
 
 ## Working principles for this project
 
-- **The knowledge base is the moat, not the dashboard.** Weekend 1 priority. No code before the first 20 entries exist.
-- **Human-in-the-loop is mandatory.** Yangcho signs off on every brief before it goes live. ~10–20 min/week review window. No auto-publish.
-- **Boring tech, durable choices.** SQLite, JSON knowledge base in Git, Streamlit. Don't reach for vector DBs, Postgres, or k8s — portfolio scale doesn't need them.
-- **Bilingual where it matters.** Strategy docs in Korean are fine. Code/UI for the dashboard targets US admissions readers — English-first.
-- **Polish the demo, not the platform.** A 2-minute video and 3 hero case studies beat a feature-rich dashboard.
-- **No proprietary data, ever.** Reject any suggestion that involves Yangcho's employer's data, internal formulas, or non-public ingredient information.
+- **The 3 hero case studies are the moat artifact.** Yangcho writes them in W1. Without them, the AI prompt has no anchor. Don't write code that depends on them until they exist.
+- **Confidence-gated auto-approve.** Trust AI self-rating ≥8 to auto-publish; queue the rest. Yangcho can retract any auto-published entry.
+- **Boring tech.** Postgres, Next.js, Python, GitHub Actions. Nothing exotic. Don't reach for vector DBs, k8s, or microservices — portfolio scale.
+- **Polish the demo, not the platform.** Hero Story Layer is the screenshot every essay supplement uses. The other 3 pages are proof-of-substance.
+- **No proprietary data, ever.** Reject any suggestion that involves Yangcho's employer's data, internal formulas, internal codenames, or non-public ingredient information. Editorial review at commit time is the safeguard — when in doubt, ask Yangcho.
+- **Atomic conventional commits.** One logical change per commit.
+- **Tests:** 3 IRON-RULE regression tests are mandatory (partial pipeline failure, scraper failure, Claude API outage). Plus happy-path E2E and 10 hand-rated friction prompt cases. ~10 tests total — right cut for portfolio scale.
 
-## Repo layout (current)
+## Repo layout
 
-- [`design.md`](design.md) — full project design from `/office-hours` (APPROVED, Builder mode)
-- [`MBA_Preparation_Strategy_Candle.md`](MBA_Preparation_Strategy_Candle.md) — Korean-language application strategy (recommenders, CEP framing, AI project framing, resume phrasing)
 - `CLAUDE.md` — this file
+- `TODOS.md` — deferred work captured during planning
+- `MBA_Preparation_Strategy_Candle.md` — Korean-language application strategy (carried forward from White Space Miner)
+- `docs/tiktok-spike.md` — Creative Center API findings (W1 spike)
+- `pipeline/` — Python pipeline package (uv-managed)
+  - `prompts/` — `.md` files, one per LLM call site
+  - `ingestion/` — Reddit + TikTok scrapers + cultural calendar reader
+  - `analysis/` — moment extraction, scoring, friction analysis, product matching
+  - `playbook/` — influencer matcher, marketing post generator, product-idea generator
+  - `orchestrator/` — daily cron entrypoint, async fan-out
+  - `queue/` — Yangcho's review queue logic
+  - `scripts/` — dev tools
+  - `llm.py` — `call_llm()` helper + `parse_or_default()` helper
+- `dashboard/` — Next.js 15 App Router
+  - `app/` — routes (page.tsx, trends, brief, methodology, admin/queue)
+  - `types/db.ts` — Supabase-generated TypeScript types
+  - `lib/` — Supabase client, helpers
+- `supabase/migrations/` — SQL migrations, version-controlled
+- `data/calendar.yaml` — cultural calendar (NFL, Bama Rush, marathons, festivals)
+- `.github/workflows/` — daily-cron.yml
+
+## Active design doc
+
+Single source of truth: [`~/.gstack/projects/yaongiworld/tony-unknown-design-20260509-024916.md`](~/.gstack/projects/yaongiworld/tony-unknown-design-20260509-024916.md). Includes the /plan-eng-review decisions (graceful degradation, confidence-gated review, scraping policy, prompt versioning, scoring formula, code structure, error handling, schema sync, test scope).
