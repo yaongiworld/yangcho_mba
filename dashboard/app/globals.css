@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+:root {
+  --color-bg: #fafaf9;
+  --color-fg: #0a0a0a;
+  --color-muted: #6b7280;
+  --color-accent: #1e40af;
+}
+
+html {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: ui-serif, Georgia, "Times New Roman", serif;
+}
+
+body {
+  font-feature-settings: "ss01" on, "kern" on;
+  text-rendering: optimizeLegibility;
+}
