@@ -1,0 +1,202 @@
+# Cultural Calendar — always-on lifestyle moments
+#
+# Pure data, no R&D required. Used by pipeline/ingestion/calendar.py to inject
+# moments into the daily run regardless of whether TikTok and Reddit produce
+# usable signal. This is the "graceful degradation" floor — the dashboard
+# always has SOMETHING to talk about.
+#
+# Confidence tag conventions:
+#   high     — dates verified from official source (league schedule, race calendar)
+#   medium   — date pattern is reliable (e.g., "third week of August every year")
+#              but the exact day shifts; verify before each application season
+#   low      — placeholder; absolutely needs verification before use
+#
+# Friction hints are a starting point for the AI to reason from; the friction
+# analyzer is free to ignore or refine them.
+
+version: 1
+last_reviewed: 2026-05-10  # bump when entries are spot-checked
+notes: |
+  Tony populated this from training-data recall on 2026-05-10. Every
+  `confidence: low` and `confidence: medium` entry needs a 5-minute
+  verification pass before the pipeline ships. `confidence: high` entries
+  are mechanically reliable (league/race schedules) but always re-verify
+  the year before relying on them.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NFL — Sunday Tailgate moments. Z-gen sports culture overlap is the wedge.
+# Source for verification: nfl.com/schedules
+# ─────────────────────────────────────────────────────────────────────────────
+
+nfl:
+  - name: "NFL Season Opener — Thursday Night Football"
+    date_pattern: "first Thursday after Labor Day"
+    confidence: high
+    friction_hints:
+      - "8 PM ET kickoff in early September; outdoor pre-game tailgating"
+      - "regional weather extremes (Florida humidity, Buffalo cold)"
+    keywords: [tailgate, NFL, kickoff, opening night]
+
+  - name: "Sunday Tailgate (regular season, weeks 1–18)"
+    date_pattern: "Sundays September through early January"
+    confidence: high
+    friction_hints:
+      - "4–6 hours outdoors pre-game"
+      - "sun + sweat + smoke from grills + grass dust"
+      - "alcohol → dehydration → skin barrier compromise"
+    keywords: [tailgate, NFL, gameday, fans]
+
+  - name: "Super Bowl Sunday"
+    date_pattern: "second Sunday of February"
+    confidence: high
+    friction_hints:
+      - "indoor party-prep beauty moment for hosts"
+      - "halftime-show-inspired makeup looks trending"
+    keywords: [Super Bowl, halftime, party, gameday]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bama Rush + Greek Life — sorority recruitment week.
+# Verify exact dates each year via University of Alabama academic calendar.
+# Trends are on TikTok months in advance; the actual week is the peak.
+# ─────────────────────────────────────────────────────────────────────────────
+
+bama_rush:
+  - name: "#BamaRush primary recruitment week"
+    date_pattern: "approximately mid-August (week before fall semester at U. of Alabama)"
+    confidence: medium
+    friction_hints:
+      - "12+ hour outdoor lineups in Alabama August heat (32–37°C, 80%+ humidity)"
+      - "full makeup expected to last all day"
+      - "shower-prep stress + hard-water film amplifying skin issues"
+      - "hairstyling heat damage from repeated styling"
+    keywords: [BamaRush, sorority, rush week, OOTD, recruitment]
+
+  - name: "Generalized US Greek life rush (fall and spring)"
+    date_pattern: "fall: August/September, spring: January/February"
+    confidence: medium
+    friction_hints:
+      - "varies by school; pattern similar to Bama but less extreme heat in fall-only schools"
+    keywords: [rush week, sorority, fraternity, Greek life]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Marathons — long outdoor exertion + post-race recovery friction.
+# Source for verification: official race websites.
+# ─────────────────────────────────────────────────────────────────────────────
+
+marathons:
+  - name: "Boston Marathon"
+    date_pattern: "Patriots' Day, third Monday of April"
+    confidence: high
+    friction_hints:
+      - "spring weather variability — can be 4°C and rainy or 25°C and humid"
+      - "post-race wind/sun-burn"
+      - "salt residue from sweat irritating sensitive skin"
+    keywords: [Boston Marathon, marathon, race day, runners]
+
+  - name: "TCS New York City Marathon"
+    date_pattern: "first Sunday of November"
+    confidence: high
+    friction_hints:
+      - "5 borough course; cold-then-warming morning"
+      - "spectator long outdoor day in November chill"
+    keywords: [NYC Marathon, marathon, race day, spectator]
+
+  - name: "Bank of America Chicago Marathon"
+    date_pattern: "early-to-mid October"
+    confidence: high
+    friction_hints:
+      - "fall weather; lake-effect wind"
+      - "long runner training cycle peaks in September"
+    keywords: [Chicago Marathon, marathon, training, fall running]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Festival season — outdoor, high-UV, multi-day camping or attendance.
+# ─────────────────────────────────────────────────────────────────────────────
+
+festivals:
+  - name: "Coachella Valley Music and Arts Festival"
+    date_pattern: "two consecutive weekends in mid-April"
+    confidence: high
+    friction_hints:
+      - "desert UV + low humidity + dust"
+      - "12+ hour days outdoors"
+      - "makeup melt at peak afternoon heat"
+      - "post-festival skin barrier repair (next-day TikTok content)"
+    keywords: [Coachella, festival, desert, UV, festival fashion]
+
+  - name: "Electric Daisy Carnival (EDC) Las Vegas"
+    date_pattern: "third weekend of May"
+    confidence: high
+    friction_hints:
+      - "Las Vegas late-May heat; nighttime event but hot pre-game"
+      - "rave makeup with glitter, gems, body paint — long-wear matters"
+    keywords: [EDC, festival, rave, Las Vegas]
+
+  - name: "Lollapalooza Chicago"
+    date_pattern: "first weekend of August"
+    confidence: high
+    friction_hints:
+      - "Chicago humid summer; risk of pop-up thunderstorms"
+      - "4 days of consecutive outdoor exposure"
+    keywords: [Lollapalooza, festival, Chicago, summer]
+
+  - name: "Bonnaroo (Manchester, TN)"
+    date_pattern: "second weekend of June"
+    confidence: high
+    friction_hints:
+      - "camping festival; multi-day outdoor with limited shower access"
+      - "Tennessee summer heat + farm-environment dust"
+    keywords: [Bonnaroo, festival, camping, summer]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Other always-on US lifestyle moments. Pattern-based, recur every year.
+# ─────────────────────────────────────────────────────────────────────────────
+
+evergreen:
+  - name: "Memorial Day Weekend"
+    date_pattern: "last Monday of May (3-day weekend)"
+    confidence: high
+    friction_hints:
+      - "first major outdoor pool/beach weekend of the season"
+      - "first heavy SPF moment after winter pale skin"
+    keywords: [Memorial Day, pool, beach, summer kickoff, BBQ]
+
+  - name: "Independence Day"
+    date_pattern: "July 4"
+    confidence: high
+    friction_hints:
+      - "all-day outdoor BBQ + fireworks at night"
+      - "patriotic-themed makeup briefly trending"
+    keywords: [July 4, fireworks, BBQ, patriotic]
+
+  - name: "Labor Day Weekend"
+    date_pattern: "first Monday of September (3-day weekend)"
+    confidence: high
+    friction_hints:
+      - "last-summer beach trips"
+      - "back-to-school prep beauty content"
+    keywords: [Labor Day, beach, summer end, back to school]
+
+  - name: "Halloween"
+    date_pattern: "October 31"
+    confidence: high
+    friction_hints:
+      - "heavy costume makeup + repeated removal stress"
+      - "outdoor trick-or-treating in cold/dry fall climates"
+    keywords: [Halloween, costume makeup, trick or treat]
+
+  - name: "Thanksgiving + Black Friday"
+    date_pattern: "fourth Thursday of November + day after"
+    confidence: high
+    friction_hints:
+      - "indoor heated dry-air homes + travel"
+      - "family-photo skin prep moment"
+    keywords: [Thanksgiving, Black Friday, family, travel]
+
+  - name: "New Year's Eve"
+    date_pattern: "December 31"
+    confidence: high
+    friction_hints:
+      - "long-wear makeup for evening events"
+      - "winter dry skin under glamour makeup"
+    keywords: [NYE, New Years, party, glam]
