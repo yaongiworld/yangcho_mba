@@ -298,30 +298,41 @@ async def stage_persist(
 
         for moment, analysis in results:
             try:
-                # Insert moment row.
+                # Upsert moment row on (moment_date, name). Migration 0004 added
+                # the unique constraint so this is idempotent: re-runs replace
+                # the previous attempt for the same (date, name) tuple rather
+                # than duplicating rows.
                 moment_resp = (
                     client.table("moments")
-                    .insert({
-                        "moment_date": today.isoformat(),
-                        "name": moment.name,
-                        "source": moment.source.value,
-                        "description": moment.description,
-                        "trend_velocity": float(moment.signal_volume),  # v1 stand-in
-                        "purchase_intent": None,  # filled by LLM scoring in W3+
-                        "brand_risk": None,
-                        "prompt_version": version,
-                    })
+                    .upsert(
+                        {
+                            "moment_date": today.isoformat(),
+                            "name": moment.name,
+                            "source": moment.source.value,
+                            "description": moment.description,
+                            "trend_velocity": float(moment.signal_volume),  # v1 stand-in
+                            "purchase_intent": None,  # filled by LLM scoring in W3+
+                            "brand_risk": None,
+                            "prompt_version": version,
+                        },
+                        on_conflict="moment_date,name",
+                    )
                     .execute()
                 )
                 if not moment_resp.data:
                     continue
                 moment_id = moment_resp.data[0]["id"]
 
+                # If this is an upsert that hit an existing moment, wipe its
+                # old frictions before inserting fresh ones. The cascade in
+                # the schema takes care of the orphaned matches.
+                client.table("frictions").delete().eq("moment_id", moment_id).execute()
+
                 # If friction analysis succeeded, insert one row per friction.
-                # Confidence gate: self_rating ≥ 8 → review_status='approved' (auto-publish).
+                # Confidence gate: self_rating ≥ 7 → review_status='approved' (auto-publish).
                 # Below threshold → review_status='pending' (queues for Yangcho).
                 if analysis is not None:
-                    review_status = "approved" if analysis.self_rating >= 8 else "pending"
+                    review_status = "approved" if analysis.self_rating >= 7 else "pending"
                     for f in analysis.frictions:
                         friction_resp = client.table("frictions").insert({
                             "moment_id": moment_id,
