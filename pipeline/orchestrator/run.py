@@ -60,7 +60,21 @@ from datetime import date as date_t
 from typing import Any
 
 from pipeline.analysis.friction import analyze_friction
+from pipeline.analysis.influencer import (
+    InfluencerInput,
+    generate_influencer_suggestions,
+)
+from pipeline.analysis.marketing_post import (
+    MarketingPostInput,
+    generate_marketing_post,
+)
 from pipeline.analysis.match_product import match_one_friction
+from pipeline.analysis.product_idea import (
+    PRODUCT_IDEA_THRESHOLD,
+    ProductIdeaInput,
+    generate_product_idea,
+    should_generate_idea,
+)
 from pipeline.db import supabase_client
 from pipeline.ingestion.calendar import moments_for as calendar_moments_for
 from pipeline.ingestion.tiktok import fetch_tiktok_signals
@@ -347,11 +361,20 @@ async def stage_persist(
                             continue
                         friction_id = friction_resp.data[0]["id"]
 
-                        # Run product matching ONLY for approved (auto-published) frictions.
+                        # Run product matching + playbook ONLY for approved frictions.
                         if review_status == "approved":
                             await _persist_matches_for_friction(
                                 client, friction_id, f, version
                             )
+
+                # Per-moment playbook: influencer suggestions. Once per
+                # moment (not per friction — same moment, same audience).
+                # Only fires when the moment has at least one approved friction.
+                if analysis is not None and analysis.self_rating >= 7:
+                    await _persist_influencer_for_moment(
+                        client, moment_id, moment, analysis, version,
+                    )
+
                 succeeded += 1
             except Exception as exc:
                 # One moment's persist failure must not abort the rest. Log and continue.
@@ -366,18 +389,30 @@ async def _persist_matches_for_friction(
     friction,
     version: str,
 ) -> None:
-    """Run product matching for one approved friction and insert its top
-    matches. Failures here MUST NOT abort the parent stage."""
+    """For one approved friction, run product matching + the per-friction
+    playbook generators (marketing post + new-product idea). Failures here
+    MUST NOT abort the parent stage.
+
+    Generation order:
+      1. Product matcher — produces 0..N matches.
+      2. Marketing post — generated only if the matcher returned a usable
+         match (need a real product to pitch against).
+      3. New-product idea — generated only if the best match score is
+         BELOW PRODUCT_IDEA_THRESHOLD (the "white space" case). Uses the
+         best match as context for what *didn't* fit.
+    """
     try:
         matches = await match_one_friction(friction)
     except Exception as exc:
-        logger.warning("persist: match_one_friction failed for friction_id=%d: %s",
-                       friction_id, exc)
-        return
+        logger.warning(
+            "persist: match_one_friction failed for friction_id=%d: %s",
+            friction_id, exc,
+        )
+        matches = []
 
-    if not matches:
-        return
-
+    # Insert match rows.
+    best_match = None
+    best_match_product = None
     for rank, m in enumerate(matches, start=1):
         try:
             client.table("matches").insert({
@@ -393,6 +428,221 @@ async def _persist_matches_for_friction(
                 "persist: match insert failed (friction=%d product=%d): %s",
                 friction_id, m.product_id, exc,
             )
+        if rank == 1:
+            best_match = m
+
+    # Hydrate brand/name for the best match so the playbook prompts have
+    # something to talk about. One extra Supabase read per friction; cheap.
+    if best_match is not None:
+        try:
+            prod_rows = (
+                client.table("products")
+                .select("brand, name")
+                .eq("id", best_match.product_id)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if prod_rows:
+                best_match_product = prod_rows[0]
+        except Exception as exc:
+            logger.warning(
+                "persist: product hydrate failed for product_id=%d: %s",
+                best_match.product_id, exc,
+            )
+
+    # Stage 2: marketing post — generate only when we have a usable match
+    # to pitch against. Always queues for review (kind=marketing_post).
+    if best_match is not None and best_match_product is not None:
+        await _persist_marketing_post(
+            client, friction_id, friction, best_match_product, best_match, version,
+        )
+
+    # Stage 3: new-product idea — fires when match score is below threshold
+    # (or matches list is empty). Uses the best (failed) match as context.
+    best_score = float(best_match.match_score) if best_match else None
+    if should_generate_idea(best_score):
+        await _persist_product_idea(
+            client, friction_id, friction, best_match_product, best_match, version,
+        )
+
+
+async def _persist_marketing_post(
+    client,
+    friction_id: int,
+    friction,
+    product_row,
+    match,
+    version: str,
+) -> None:
+    """Generate + insert a marketing_post playbook output for one friction.
+
+    Always queues for review (review_status='pending'). Marketing posts
+    are voice-sensitive and Yangcho gates every one.
+    """
+    try:
+        inp = MarketingPostInput(
+            friction=friction,
+            product_brand=product_row.get("brand", ""),
+            product_name=product_row.get("name", ""),
+            match=match,
+        )
+        post = await generate_marketing_post(inp)
+    except Exception as exc:
+        logger.warning(
+            "persist: marketing_post failed for friction_id=%d: %s",
+            friction_id, exc,
+        )
+        return
+
+    if post is None:
+        return  # generator already logged
+
+    try:
+        client.table("playbook_outputs").upsert(
+            {
+                "friction_id": friction_id,
+                "kind": "marketing_post",
+                "body": post.model_dump(mode="json"),
+                "review_status": "pending",  # always queue
+                "prompt_version": version,
+            },
+            on_conflict="friction_id,kind",
+        ).execute()
+    except Exception as exc:
+        logger.warning(
+            "persist: marketing_post insert failed for friction_id=%d: %s",
+            friction_id, exc,
+        )
+
+
+async def _persist_product_idea(
+    client,
+    friction_id: int,
+    friction,
+    best_match_product,
+    best_match,
+    version: str,
+) -> None:
+    """Generate + insert a product_idea playbook output for one friction.
+
+    Always queues for review.
+    """
+    try:
+        inp = ProductIdeaInput(
+            friction=friction,
+            best_match_brand=(best_match_product or {}).get("brand", "(no match)"),
+            best_match_name=(best_match_product or {}).get("name", "(no match in catalog)"),
+            best_match_score=float(best_match.match_score) if best_match else 0.0,
+            best_match_argument=(best_match.scientific_argument if best_match else "(no candidate cleared the threshold)"),
+        )
+        idea = await generate_product_idea(inp)
+    except Exception as exc:
+        logger.warning(
+            "persist: product_idea failed for friction_id=%d: %s",
+            friction_id, exc,
+        )
+        return
+
+    if idea is None:
+        return
+
+    try:
+        client.table("playbook_outputs").upsert(
+            {
+                "friction_id": friction_id,
+                "kind": "product_idea",
+                "body": idea.model_dump(mode="json"),
+                "review_status": "pending",
+                "prompt_version": version,
+            },
+            on_conflict="friction_id,kind",
+        ).execute()
+    except Exception as exc:
+        logger.warning(
+            "persist: product_idea insert failed for friction_id=%d: %s",
+            friction_id, exc,
+        )
+
+
+async def _persist_influencer_for_moment(
+    client,
+    moment_id: int,
+    moment,
+    analysis,
+    version: str,
+) -> None:
+    """Generate + insert influencer suggestions for one moment.
+
+    Per-moment (not per-friction) — same moment, same audience. The
+    playbook_outputs schema is keyed on friction_id though, so we attach
+    each suggestion to the FIRST friction of the moment as a representative.
+    A future schema cleanup could add a moment_id FK column to playbook_outputs;
+    for now the friction-id link is sufficient because the dashboard renders
+    influencer suggestions per-moment by reading them from any of the
+    moment's friction IDs.
+    """
+    if not analysis.frictions:
+        return
+
+    # Combine all friction summaries as context for the AI's web search.
+    friction_context = " ".join(
+        f.summary for f in analysis.frictions
+    )
+
+    try:
+        inp = InfluencerInput(
+            moment_name=moment.name,
+            moment_description=moment.description or moment.name,
+            friction_context=friction_context,
+        )
+        suggestions = await generate_influencer_suggestions(inp)
+    except Exception as exc:
+        logger.warning(
+            "persist: influencer suggestions failed for moment_id=%d: %s",
+            moment_id, exc,
+        )
+        return
+
+    if not suggestions:
+        return
+
+    # Look up the moment's first friction id to anchor the playbook row.
+    fric = (
+        client.table("frictions")
+        .select("id")
+        .eq("moment_id", moment_id)
+        .order("id")
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not fric:
+        return
+    anchor_friction_id = fric[0]["id"]
+
+    # Single playbook_outputs row holds ALL suggestions for this moment as
+    # a list in body — keeps the UNIQUE (friction_id, kind) constraint
+    # honored and lets the dashboard render them as a group.
+    body = {"suggestions": [s.model_dump(mode="json") for s in suggestions]}
+    try:
+        client.table("playbook_outputs").upsert(
+            {
+                "friction_id": anchor_friction_id,
+                "kind": "influencer",
+                "body": body,
+                "review_status": "pending",  # always queue
+                "prompt_version": version,
+            },
+            on_conflict="friction_id,kind",
+        ).execute()
+    except Exception as exc:
+        logger.warning(
+            "persist: influencer insert failed for moment_id=%d: %s",
+            moment_id, exc,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -427,26 +677,39 @@ async def run_daily(today: date_t | None = None) -> int:
     # Stage 5 — persist.
     await stage_persist(today, results)
 
-    # Stage 6 — backfill matches for approved frictions that have none.
-    # Catches Yangcho's manual approves via /admin between cron ticks.
-    await stage_backfill_matches()
+    # Stage 6 — backfill matches + playbook for approved frictions/moments
+    # missing one. Catches Yangcho's manual approves via /admin between ticks.
+    await stage_backfill_playbook()
 
     last = last_successful_run_at()
     logger.info("=== LLC pipeline done. Last successful run: %s ===", last)
     return 0
 
 
-async def stage_backfill_matches() -> None:
-    """Find approved frictions with zero matches and run product matching on them.
+async def stage_backfill_playbook() -> None:
+    """Catch-up generator for approved content missing matches or playbook.
 
-    This is the catch-up path for the manual-approve workflow: Yangcho
-    flips a friction to approved via /admin, which doesn't trigger matching
-    synchronously (that would block the request and require Anthropic
-    creds in the dashboard process). Instead the next cron tick reconciles.
+    Three sub-passes, all wrapped in one record_stage:
+      1. Approved frictions with no matches → run matcher + (per
+         _persist_matches_for_friction) marketing_post + product_idea
+         in the same call.
+      2. Approved frictions WITH matches but missing marketing_post →
+         generate just the marketing post.
+      3. Moments with approved frictions but no influencer row → generate
+         influencer suggestions.
 
-    Wrapped in record_stage so the operator can see backfill runs in the
-    pipeline_runs table alongside the regular daily flow.
+    The matcher pass is the most common — it's what fires whenever Yangcho
+    manually approves a friction via /admin. The other two passes handle
+    the corner cases where matching succeeded but a playbook step failed
+    on a prior run.
+
+    Wrapped in record_stage(MATCH_PRODUCT) so the operator can see backfill
+    runs in pipeline_runs alongside the regular daily flow. We don't have
+    a dedicated GENERATE_PLAYBOOK stage code yet — folding the playbook
+    catch-up into the same stage row keeps the schema simple.
     """
+    from pipeline.schemas import FrictionItem
+
     with record_stage(PipelineStage.MATCH_PRODUCT) as h:
         try:
             client = supabase_client()
@@ -456,57 +719,236 @@ async def stage_backfill_matches() -> None:
             h.items_succeeded = 0
             return
 
-        # Find all approved friction ids.
+        version = prompt_version()
+        total_processed = 0
+        total_succeeded = 0
+
+        # ── Pass 1: approved frictions with no matches ──────────────────
         approved = (
             client.table("frictions")
-            .select("id, friction_summary, mechanism, efficacy_class")
+            .select("id, moment_id, friction_summary, mechanism, efficacy_class")
             .eq("review_status", "approved")
             .execute()
             .data
             or []
         )
         approved_ids = {f["id"] for f in approved}
-        if not approved_ids:
-            h.items_processed = 0
-            h.items_succeeded = 0
-            return
 
-        # Find which approved friction ids already have at least one match.
-        matched = (
-            client.table("matches")
-            .select("friction_id")
-            .in_("friction_id", list(approved_ids))
-            .execute()
-            .data
-            or []
-        )
-        already_matched_ids = {m["friction_id"] for m in matched}
-
-        to_match = [f for f in approved if f["id"] not in already_matched_ids]
-        h.items_processed = len(to_match)
-        if not to_match:
-            h.items_succeeded = 0
-            return
-
-        logger.info(
-            "backfill: %d approved friction(s) missing matches",
-            len(to_match),
-        )
-
-        # Lazy import to avoid a cycle (FrictionItem lives in schemas).
-        from pipeline.schemas import FrictionItem
-
-        version = prompt_version()
-        succeeded = 0
-        for row in to_match:
-            friction = FrictionItem(
-                summary=row["friction_summary"],
-                mechanism=row["mechanism"],
-                efficacy_class=row.get("efficacy_class"),
+        if approved_ids:
+            matched = (
+                client.table("matches")
+                .select("friction_id")
+                .in_("friction_id", list(approved_ids))
+                .execute()
+                .data
+                or []
             )
-            await _persist_matches_for_friction(client, row["id"], friction, version)
-            succeeded += 1
-        h.items_succeeded = succeeded
+            already_matched_ids = {m["friction_id"] for m in matched}
+
+            unmatched = [f for f in approved if f["id"] not in already_matched_ids]
+            if unmatched:
+                logger.info(
+                    "backfill: pass 1 — %d approved friction(s) missing matches",
+                    len(unmatched),
+                )
+                for row in unmatched:
+                    friction = FrictionItem(
+                        summary=row["friction_summary"],
+                        mechanism=row["mechanism"],
+                        efficacy_class=row.get("efficacy_class"),
+                    )
+                    # _persist_matches_for_friction also fires marketing_post
+                    # and product_idea per the wire in stage_persist, so this
+                    # pass covers all per-friction playbook outputs too.
+                    await _persist_matches_for_friction(
+                        client, row["id"], friction, version
+                    )
+                    total_succeeded += 1
+                total_processed += len(unmatched)
+
+        # ── Pass 2: approved frictions with matches but missing per-friction playbook ──
+        # Catches the case where pass 1 already ran (matches exist) but
+        # one or both of the per-friction playbook items is missing.
+        # Two things to check per friction:
+        #   • Marketing post — generated for every approved friction.
+        #   • Product idea — generated only when best match < threshold.
+        if approved_ids:
+            with_post = (
+                client.table("playbook_outputs")
+                .select("friction_id")
+                .in_("friction_id", list(approved_ids))
+                .eq("kind", "marketing_post")
+                .execute()
+                .data
+                or []
+            )
+            with_post_ids = {p["friction_id"] for p in with_post}
+
+            with_idea = (
+                client.table("playbook_outputs")
+                .select("friction_id")
+                .in_("friction_id", list(approved_ids))
+                .eq("kind", "product_idea")
+                .execute()
+                .data
+                or []
+            )
+            with_idea_ids = {p["friction_id"] for p in with_idea}
+
+            # Frictions that have at least one match (eligible for the
+            # per-friction playbook even if the score is low — we still
+            # want a marketing_post, and depending on the score, a product_idea).
+            with_matches = [
+                f for f in approved if f["id"] in already_matched_ids
+            ]
+
+            need_playbook = [
+                f for f in with_matches
+                if f["id"] not in with_post_ids
+                or f["id"] not in with_idea_ids
+            ]
+
+            if need_playbook:
+                logger.info(
+                    "backfill: pass 2 — %d approved friction(s) missing playbook item(s)",
+                    len(need_playbook),
+                )
+                from pipeline.schemas import ProductMatchItem
+
+                for row in need_playbook:
+                    # Hydrate the top match (rank 1).
+                    top_match = (
+                        client.table("matches")
+                        .select("product_id, match_score, scientific_argument")
+                        .eq("friction_id", row["id"])
+                        .order("rank")
+                        .limit(1)
+                        .execute()
+                        .data
+                        or []
+                    )
+                    if not top_match:
+                        continue
+                    prod = (
+                        client.table("products")
+                        .select("brand, name")
+                        .eq("id", top_match[0]["product_id"])
+                        .limit(1)
+                        .execute()
+                        .data
+                        or []
+                    )
+
+                    friction = FrictionItem(
+                        summary=row["friction_summary"],
+                        mechanism=row["mechanism"],
+                        efficacy_class=row.get("efficacy_class"),
+                    )
+                    match = ProductMatchItem(
+                        product_id=top_match[0]["product_id"],
+                        match_score=float(top_match[0]["match_score"]),
+                        scientific_argument=top_match[0]["scientific_argument"],
+                    )
+
+                    # Marketing post (always needed if missing and we have a product).
+                    if row["id"] not in with_post_ids and prod:
+                        await _persist_marketing_post(
+                            client, row["id"], friction, prod[0], match, version,
+                        )
+
+                    # Product idea (only when match score below threshold).
+                    if (
+                        row["id"] not in with_idea_ids
+                        and should_generate_idea(float(top_match[0]["match_score"]))
+                    ):
+                        await _persist_product_idea(
+                            client, row["id"], friction,
+                            prod[0] if prod else None, match, version,
+                        )
+
+                    total_succeeded += 1
+                total_processed += len(need_playbook)
+
+        # ── Pass 3: moments with approved frictions but no influencer ──
+        # Per-moment, not per-friction. Influencer suggestions are anchored
+        # to the moment's FIRST friction id; see _persist_influencer_for_moment.
+        if approved_ids:
+            moment_ids = list({f["moment_id"] for f in approved})
+
+            # Find anchor friction id per moment.
+            with_influencer = (
+                client.table("playbook_outputs")
+                .select("friction_id")
+                .in_("friction_id", list(approved_ids))
+                .eq("kind", "influencer")
+                .execute()
+                .data
+                or []
+            )
+            with_influencer_anchor_friction_ids = {
+                p["friction_id"] for p in with_influencer
+            }
+
+            # Find moment_ids whose first approved friction id is not in the
+            # influencer anchor set.
+            first_friction_per_moment: dict[int, int] = {}
+            for f in sorted(approved, key=lambda x: x["id"]):
+                first_friction_per_moment.setdefault(f["moment_id"], f["id"])
+
+            need_influencer_moments = [
+                m_id for m_id, anchor_id in first_friction_per_moment.items()
+                if anchor_id not in with_influencer_anchor_friction_ids
+            ]
+
+            if need_influencer_moments:
+                # Hydrate moment rows.
+                moment_rows = (
+                    client.table("moments")
+                    .select("id, name, description")
+                    .in_("id", need_influencer_moments)
+                    .execute()
+                    .data
+                    or []
+                )
+                logger.info(
+                    "backfill: pass 3 — %d moment(s) missing influencer suggestions",
+                    len(moment_rows),
+                )
+                # Lightweight namespace for the helper's expected shape.
+                from types import SimpleNamespace
+
+                for m_row in moment_rows:
+                    # Gather all approved frictions for this moment as context.
+                    fric_rows = [f for f in approved if f["moment_id"] == m_row["id"]]
+                    # Build a stub analysis-like object that has .frictions
+                    # and .self_rating ≥ 7 so the helper's preconditions are met.
+                    analysis_stub = SimpleNamespace(
+                        frictions=[
+                            FrictionItem(
+                                summary=fr["friction_summary"],
+                                mechanism=fr["mechanism"],
+                                efficacy_class=fr.get("efficacy_class"),
+                            )
+                            for fr in fric_rows
+                        ],
+                        self_rating=10,
+                    )
+                    moment_stub = SimpleNamespace(
+                        name=m_row["name"],
+                        description=m_row.get("description"),
+                    )
+                    await _persist_influencer_for_moment(
+                        client, m_row["id"], moment_stub, analysis_stub, version,
+                    )
+                    total_succeeded += 1
+                total_processed += len(moment_rows)
+
+        h.items_processed = total_processed
+        h.items_succeeded = total_succeeded
+        logger.info(
+            "backfill: complete — %d/%d items processed",
+            total_succeeded, total_processed,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -1,9 +1,9 @@
-"""Standalone entrypoint to run JUST the backfill-matches stage.
+"""Standalone entrypoint to run JUST the backfill-playbook stage.
 
 Used by the /admin "Run matcher now" button, which fires a GitHub Actions
 workflow that runs this script. Bypasses the full daily ingest + extract +
-score + analyze loop — only the catch-up matching for approved frictions
-that have no matches yet.
+score + analyze loop — only the catch-up for approved content missing
+matches or playbook outputs (marketing posts, product ideas, influencers).
 
 Invocation:
     uv run python -m pipeline.scripts.match_pending
@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from pipeline.orchestrator.run import stage_backfill_matches
+from pipeline.orchestrator.run import stage_backfill_playbook
 
 
 async def main() -> int:
@@ -28,7 +28,7 @@ async def main() -> int:
     )
     logger = logging.getLogger(__name__)
     logger.info("=== match_pending start (manual trigger) ===")
-    await stage_backfill_matches()
+    await stage_backfill_playbook()
     logger.info("=== match_pending done ===")
     return 0
 
