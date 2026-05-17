@@ -88,6 +88,10 @@ export interface PublicProduct {
   public_url: string;
   is_lg: boolean;
   platform: string;
+  /** Bucket-relative path inside product-images. Null when the image
+   *  has not yet been mirrored from OY's CDN. Build the public URL via
+   *  productImageUrl() in lib/storage.ts. */
+  image_path: string | null;
 }
 
 export interface PublicMatch {
@@ -174,7 +178,7 @@ export async function getBriefByMomentId(momentId: number): Promise<{
   const { data: matchData, error: matchErr } = await supabase
     .from("matches")
     .select(
-      "id, friction_id, product_id, match_score, rank, scientific_argument, products(id, brand, name, category, public_url, is_lg, platform)",
+      "id, friction_id, product_id, match_score, rank, scientific_argument, products(id, brand, name, category, public_url, is_lg, platform, image_path)",
     )
     .in("friction_id", frictionIds)
     .order("rank");
@@ -259,6 +263,155 @@ export async function getBriefByMomentId(momentId: number): Promise<{
     frictions: frictionsWithMatches,
     influencer_suggestions: influencerSuggestions,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Home dashboard cards: one row per approved moment, projected to the bits
+// the home page renders (top friction, top match, marketing post, top
+// influencer). Pre-flattened server-side so the page stays declarative.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface DashboardCard {
+  moment: PublicMoment;
+  /** The highest-self-rated approved friction for this moment. Cards always
+   *  have one — moments with no approved frictions are filtered out upstream. */
+  friction: PublicFriction;
+  /** Rank-1 match for the chosen friction. Null when the friction has no
+   *  product matches yet (manual approval between cron ticks). */
+  top_match: PublicMatch | null;
+  /** Approved marketing post for the chosen friction. Null when not yet
+   *  generated/approved. */
+  marketing_post: MarketingPostBody | null;
+  /** First approved influencer suggestion for this moment. Influencer outputs
+   *  are stored per-moment (anchored to one friction), so we don't filter by
+   *  friction here. Null when none exist. */
+  top_influencer: InfluencerSuggestionEntry | null;
+}
+
+export async function getDashboardCards(): Promise<DashboardCard[]> {
+  const supabase = createServerClient();
+
+  // 1) All approved frictions. We need every row to compute the per-moment
+  //    "top friction" (highest self_rating). Keep this query unscoped by
+  //    moment to avoid an N+1.
+  const { data: frictionRows, error: frictionErr } = await supabase
+    .from("frictions")
+    .select("id, moment_id, friction_summary, mechanism, efficacy_class, self_rating, created_at")
+    .eq("review_status", "approved");
+  if (frictionErr || !frictionRows || frictionRows.length === 0) return [];
+
+  const frictions = frictionRows as unknown as PublicFriction[];
+
+  // Pick the highest self_rating per moment; tiebreak on most recent.
+  const topByMoment = new Map<number, PublicFriction>();
+  for (const f of frictions) {
+    const cur = topByMoment.get(f.moment_id);
+    if (
+      !cur ||
+      f.self_rating > cur.self_rating ||
+      (f.self_rating === cur.self_rating && f.created_at > cur.created_at)
+    ) {
+      topByMoment.set(f.moment_id, f);
+    }
+  }
+
+  const topFrictionIds = Array.from(topByMoment.values()).map((f) => f.id);
+  const momentIds = Array.from(topByMoment.keys());
+
+  // 2) Moments themselves, sorted by moment_date desc (newest first matches
+  //    the "daily updating" feel of the dashboard).
+  const { data: momentRows, error: momentErr } = await supabase
+    .from("moments")
+    .select("id, name, source, description, trend_velocity, score, moment_date, created_at")
+    .in("id", momentIds)
+    .order("moment_date", { ascending: false })
+    .order("created_at", { ascending: false });
+  if (momentErr || !momentRows) return [];
+  const moments = momentRows as unknown as PublicMoment[];
+
+  // 3) Rank-1 matches for the chosen frictions, joined to products.
+  const { data: matchData } = await supabase
+    .from("matches")
+    .select(
+      "id, friction_id, product_id, match_score, rank, scientific_argument, products(id, brand, name, category, public_url, is_lg, platform, image_path)",
+    )
+    .in("friction_id", topFrictionIds)
+    .eq("rank", 1);
+  type MatchRow = {
+    id: number;
+    friction_id: number;
+    product_id: number;
+    match_score: number;
+    rank: number;
+    scientific_argument: string;
+    products: PublicProduct | null;
+  };
+  const matches = (matchData ?? []) as unknown as MatchRow[];
+  const matchByFriction = new Map<number, PublicMatch>();
+  for (const m of matches) {
+    if (!m.products) continue;
+    matchByFriction.set(m.friction_id, {
+      id: m.id,
+      product_id: m.product_id,
+      match_score: Number(m.match_score),
+      rank: m.rank,
+      scientific_argument: m.scientific_argument,
+      product: m.products,
+    });
+  }
+
+  // 4) Approved marketing posts for chosen frictions.
+  //    Influencer outputs for the moments. One query for both kinds.
+  const allFrictionIdsForMoments = frictions.map((f) => f.id);
+  const { data: playbookData } = await supabase
+    .from("playbook_outputs")
+    .select("id, friction_id, kind, body")
+    .in("friction_id", allFrictionIdsForMoments)
+    .in("kind", ["marketing_post", "influencer"])
+    .eq("review_status", "approved");
+  type PlaybookRow = {
+    id: number;
+    friction_id: number;
+    kind: "marketing_post" | "product_idea" | "influencer";
+    body: Record<string, unknown>;
+  };
+  const playbook = (playbookData ?? []) as unknown as PlaybookRow[];
+
+  const marketingByFriction = new Map<number, MarketingPostBody>();
+  // Influencer outputs are anchored to one friction; reverse-lookup that to
+  // moment_id so we can attach the post to whichever card matches.
+  const frictionToMoment = new Map<number, number>();
+  for (const f of frictions) frictionToMoment.set(f.id, f.moment_id);
+  const influencerByMoment = new Map<number, InfluencerSuggestionEntry>();
+
+  for (const p of playbook) {
+    if (p.kind === "marketing_post") {
+      marketingByFriction.set(p.friction_id, p.body as unknown as MarketingPostBody);
+    } else if (p.kind === "influencer") {
+      const body = p.body as unknown as InfluencerOutputBody;
+      const momId = frictionToMoment.get(p.friction_id);
+      if (momId != null && body.suggestions && body.suggestions.length > 0) {
+        // Take the first suggestion only — the home card is a teaser; full
+        // list lives on /brief/[id].
+        influencerByMoment.set(momId, body.suggestions[0]);
+      }
+    }
+  }
+
+  // 5) Assemble cards in moment-sort order.
+  const cards: DashboardCard[] = [];
+  for (const m of moments) {
+    const friction = topByMoment.get(m.id);
+    if (!friction) continue;
+    cards.push({
+      moment: m,
+      friction,
+      top_match: matchByFriction.get(friction.id) ?? null,
+      marketing_post: marketingByFriction.get(friction.id) ?? null,
+      top_influencer: influencerByMoment.get(m.id) ?? null,
+    });
+  }
+  return cards;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

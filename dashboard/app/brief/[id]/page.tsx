@@ -10,6 +10,7 @@
  * connecting friction mechanism to product mechanism.
  */
 
+import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
@@ -21,6 +22,7 @@ import type {
   ProductIdeaBody,
   PublicMatch,
 } from "@/lib/queries";
+import { productImageUrl } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
 
@@ -225,26 +227,50 @@ function InfluencerSection({ body }: { body: InfluencerOutputBody }) {
 function MatchBlock({ match }: { match: PublicMatch }) {
   const { product } = match;
   const lgBadge = product.is_lg ? "LG H&H" : "competitor brand";
+  const imgUrl = productImageUrl(product.image_path);
   return (
-    <div>
-      <div className="flex items-baseline gap-3 flex-wrap">
-        <p className="text-base font-semibold">{product.brand}</p>
-        <span className="text-xs uppercase tracking-wide text-neutral-500">{lgBadge}</span>
-        <span className="ml-auto text-xs font-mono text-neutral-500">
-          match {match.match_score.toFixed(2)}
-        </span>
-      </div>
+    <div className="flex gap-4">
       <a
         href={product.public_url}
         target="_blank"
         rel="noopener noreferrer"
-        className="mt-1 block text-neutral-900 hover:underline"
+        className="shrink-0 block w-20 h-20 rounded-md bg-neutral-100 overflow-hidden relative hover:opacity-90"
+        aria-label={`Open ${product.name} on Olive Young`}
       >
-        {product.name} ↗
+        {imgUrl ? (
+          <Image
+            src={imgUrl}
+            alt={product.name}
+            fill
+            sizes="80px"
+            className="object-cover"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-[10px] text-neutral-400 text-center px-1">
+            no image
+          </div>
+        )}
       </a>
-      <p className="mt-3 text-neutral-800 leading-relaxed">
-        {match.scientific_argument}
-      </p>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-3 flex-wrap">
+          <p className="text-base font-semibold">{product.brand}</p>
+          <span className="text-xs uppercase tracking-wide text-neutral-500">{lgBadge}</span>
+          <span className="ml-auto text-xs font-mono text-neutral-500">
+            match {match.match_score.toFixed(2)}
+          </span>
+        </div>
+        <a
+          href={product.public_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-1 block text-neutral-900 hover:underline"
+        >
+          {product.name} ↗
+        </a>
+        <p className="mt-3 text-neutral-800 leading-relaxed">
+          {match.scientific_argument}
+        </p>
+      </div>
     </div>
   );
 }
