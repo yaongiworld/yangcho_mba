@@ -87,14 +87,23 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 
 def load_calendar(path: Path | None = None) -> list[tuple[str, dict[str, Any]]]:
-    """Return a flat list of (category, entry) pairs from the YAML file."""
+    """Return a flat list of (category, entry) pairs from the YAML file.
+
+    Treats every top-level key as a category whose value is a list of entries.
+    Skips metadata keys (`version`, `last_reviewed`, `notes`) so the YAML can
+    grow new categories without code changes — adding `sports_championships`
+    or `music_festivals` Just Works.
+    """
     p = path or DEFAULT_CALENDAR_PATH
     data = _load_yaml(p)
+    METADATA_KEYS = {"version", "last_reviewed", "notes"}
     out: list[tuple[str, dict[str, Any]]] = []
-    for category in ("nfl", "bama_rush", "marathons", "festivals", "evergreen"):
-        entries = data.get(category) or []
+    for category, entries in data.items():
+        if category in METADATA_KEYS or not isinstance(entries, list):
+            continue
         for entry in entries:
-            out.append((category, entry))
+            if isinstance(entry, dict):
+                out.append((category, entry))
     return out
 
 

@@ -200,3 +200,270 @@ evergreen:
       - "long-wear makeup for evening events"
       - "winter dry skin under glamour makeup"
     keywords: [NYE, New Years, party, glam]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sports playoffs + championships beyond NFL. Same outdoor/indoor friction
+# patterns; different demographic + product matches (NBA finals = late spring
+# transitional skin; MLB World Series = late October cold + makeup).
+# ─────────────────────────────────────────────────────────────────────────────
+
+sports_championships:
+  - name: "NBA Finals"
+    date_pattern: "early June (best-of-7, ~2 weeks)"
+    confidence: high
+    friction_hints:
+      - "courtside-fan glam — high-flash photography → reflective makeup planning"
+      - "transitional spring → summer skin (UV ramping up, humidity rising)"
+    keywords: [NBA, Finals, basketball, courtside]
+
+  - name: "MLB World Series"
+    date_pattern: "late October into early November"
+    confidence: high
+    friction_hints:
+      - "outdoor evening games — cold-cheek wind exposure + long-wear makeup"
+      - "playoff-beard culture (men's grooming adjacent)"
+    keywords: [World Series, MLB, baseball, playoff]
+
+  - name: "March Madness — NCAA basketball tournament"
+    date_pattern: "mid-March through first week of April"
+    confidence: high
+    friction_hints:
+      - "indoor arena dry-air HVAC + heavy fan-paint face designs"
+      - "college campus pre-game body paint + transfer concerns"
+    keywords: [March Madness, NCAA, basketball, bracket]
+
+  - name: "Kentucky Derby"
+    date_pattern: "first Saturday in May"
+    confidence: high
+    friction_hints:
+      - "long outdoor day (10+ hrs) under direct sun in hats + heavy makeup"
+      - "humid Kentucky spring; tightlined evening-look makeup pre-9-am"
+    keywords: [Kentucky Derby, horse racing, Run for the Roses, hat]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Music festivals + concerts. High photo-density moments. Outdoor exposure
+# combines with rave/glitter cosmetics + sweat — strong K-Beauty long-wear
+# + barrier-repair territory.
+# ─────────────────────────────────────────────────────────────────────────────
+
+music_festivals:
+  - name: "Coachella Weekend 1 & 2"
+    date_pattern: "two consecutive weekends in mid-late April"
+    confidence: high
+    friction_hints:
+      - "Coachella Valley desert: UV index 8-10, dust, dry heat 95°F+"
+      - "extended cosmetic wear (glitter, gems, body paint) over multiple days"
+    keywords: [Coachella, festival, desert, Indio]
+
+  - name: "Stagecoach Festival"
+    date_pattern: "weekend after Coachella, late April"
+    confidence: high
+    friction_hints:
+      - "same desert UV + dust profile, country-adjacent aesthetic shift"
+      - "long days outdoors + boots + western-look makeup"
+    keywords: [Stagecoach, country music, festival, desert]
+
+  - name: "Electric Daisy Carnival (EDC) Las Vegas"
+    date_pattern: "third weekend of May"
+    confidence: high
+    friction_hints:
+      - "all-night outdoor rave 7pm–5am × 3 nights — heavy sweat + glitter wear"
+      - "Vegas late-spring desert heat 90°F+ with dust"
+    keywords: [EDC, rave, electronic, Las Vegas, festival]
+
+  - name: "Lollapalooza Chicago"
+    date_pattern: "first weekend of August"
+    confidence: high
+    friction_hints:
+      - "4-day Grant Park lakeside humidity + UV + crowd-heat"
+      - "midwest summer aerosols + sweat-resistant face paint trending"
+    keywords: [Lollapalooza, Lolla, Chicago, festival]
+
+  - name: "Burning Man"
+    date_pattern: "last week of August into Labor Day"
+    confidence: medium
+    friction_hints:
+      - "extreme desert: 100°F day → 40°F night + alkaline dust storms"
+      - "off-grid week, no showers, dust-impacted barrier function"
+    keywords: [Burning Man, playa, Black Rock, festival]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Awards shows + red carpet moments. Tight makeup-prep windows, photo-heavy
+# beauty content. K-Beauty primer + glass-skin trends spike around these.
+# ─────────────────────────────────────────────────────────────────────────────
+
+awards_shows:
+  - name: "The Met Gala"
+    date_pattern: "first Monday in May"
+    confidence: high
+    friction_hints:
+      - "marathon red-carpet → after-party makeup that survives 8+ hours"
+      - "spike in 'celebrity skin prep' content the week prior"
+    keywords: [Met Gala, fashion, red carpet, Vogue]
+
+  - name: "The Oscars (Academy Awards)"
+    date_pattern: "late February or early March"
+    confidence: high
+    friction_hints:
+      - "HD broadcast → flawless-skin pressure; celebrity facialist content spike"
+      - "red carpet under flash photography → SPF-in-makeup chatter"
+    keywords: [Oscars, Academy Awards, red carpet]
+
+  - name: "The Grammys"
+    date_pattern: "early February"
+    confidence: high
+    friction_hints:
+      - "music + fashion crossover beauty moments"
+      - "Y2K and editorial looks dominate the week prior"
+    keywords: [Grammys, music, red carpet]
+
+  - name: "The Met Gala + NYFW September"
+    date_pattern: "September Fashion Week — second week"
+    confidence: high
+    friction_hints:
+      - "back-to-back show schedule = model skin under accumulated makeup wear"
+      - "fall trend forecasting peaks; consumers shop new routines"
+    keywords: [NYFW, Fashion Week, runway, New York]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Seasonal skin transitions. Annual climate inflection points where US
+# consumers swap routines; classic K-Beauty entry windows.
+# ─────────────────────────────────────────────────────────────────────────────
+
+seasonal_transitions:
+  - name: "Spring Allergy Season"
+    date_pattern: "March through early May (peak: April)"
+    confidence: high
+    friction_hints:
+      - "pollen-aggravated peri-eye redness, rubbing-induced irritation"
+      - "antihistamine dryness layered on top of seasonal humidity swing"
+    keywords: [allergies, pollen, spring, sensitive skin]
+
+  - name: "Summer-to-Fall Transition"
+    date_pattern: "late August through September"
+    confidence: high
+    friction_hints:
+      - "tan fading + acne rebound as sweat decreases but barrier still compromised"
+      - "back-to-school routine reset across all demographics"
+    keywords: [back to school, fall transition, skin reset]
+
+  - name: "Mid-Winter Dry-Skin Peak"
+    date_pattern: "mid-January through mid-February"
+    confidence: high
+    friction_hints:
+      - "indoor heating + outdoor wind → trans-epidermal water loss peaks"
+      - "post-holiday gut/sugar-recovery acne + dullness"
+    keywords: [winter dry skin, January, barrier repair]
+
+  - name: "Daylight Saving — Spring Forward"
+    date_pattern: "second Sunday of March"
+    confidence: high
+    friction_hints:
+      - "sleep disruption → cortisol spike → inflammatory skin events"
+      - "morning routine windows compress; busy-moms skincare shortcut content"
+    keywords: [daylight saving, spring forward, sleep, cortisol]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Religious + cultural moments with documented beauty/lifestyle behaviors.
+# Inclusive coverage of demographics outside Bama Rush.
+# ─────────────────────────────────────────────────────────────────────────────
+
+cultural_calendar:
+  - name: "Lunar New Year"
+    date_pattern: "varies (late Jan to mid-Feb by lunar calendar)"
+    confidence: high
+    friction_hints:
+      - "family-photo prep + 'fresh-start' skincare resolutions"
+      - "K-Beauty + East-Asian beauty content spikes in US Asian communities"
+    keywords: [Lunar New Year, Chinese New Year, Korean New Year, Seollal]
+
+  - name: "Ramadan + Eid al-Fitr"
+    date_pattern: "varies by Islamic calendar; fasting month + holiday"
+    confidence: high
+    friction_hints:
+      - "fasting-induced dehydration affects skin barrier + lip health"
+      - "modest-beauty + halal-certified product chatter rises"
+    keywords: [Ramadan, Eid, modest beauty, halal]
+
+  - name: "Pride Month"
+    date_pattern: "June (peak weekend varies by city)"
+    confidence: high
+    friction_hints:
+      - "outdoor parade SPF + glitter long-wear under heat"
+      - "queer creator content + bold-color trends dominate"
+    keywords: [Pride, LGBTQ, parade, June]
+
+  - name: "Diwali"
+    date_pattern: "late October or early November (varies by Hindu calendar)"
+    confidence: high
+    friction_hints:
+      - "intricate eye makeup + festive-glow primers"
+      - "South Asian US-diaspora beauty content spike"
+    keywords: [Diwali, festival of lights, South Asian]
+
+  - name: "Day of the Dead (Día de los Muertos)"
+    date_pattern: "November 1–2"
+    confidence: high
+    friction_hints:
+      - "calavera face paint requires long-wear primer + clean removal"
+      - "Latinx beauty content + warm-toned palette trends"
+    keywords: [Day of the Dead, Dia de los Muertos, calavera]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Wedding + life-event windows. High-stakes makeup prep, well-studied
+# American consumer-spend moments.
+# ─────────────────────────────────────────────────────────────────────────────
+
+life_events:
+  - name: "Wedding Season Peak"
+    date_pattern: "May through October (peak weekends: June + September)"
+    confidence: high
+    friction_hints:
+      - "8+ hour bridal-party makeup wear under outdoor reception conditions"
+      - "12-week pre-wedding skincare routine spike (engagement-to-aisle window)"
+    keywords: [wedding, bride, bridal, engagement]
+
+  - name: "Prom Season"
+    date_pattern: "April through early May"
+    confidence: high
+    friction_hints:
+      - "first-formal-event teens trying long-wear makeup for the first time"
+      - "spray-tan + heavy-foundation interaction issues common in 16-18 demo"
+    keywords: [prom, high school, teen, formal]
+
+  - name: "Graduation Season"
+    date_pattern: "mid-May through early June"
+    confidence: high
+    friction_hints:
+      - "outdoor ceremony — sun + cap-hair + family-photo skin prep"
+      - "post-grad routine shift content (college → workforce, dorm → apartment)"
+    keywords: [graduation, commencement, grad]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shopping moments. Skincare consumer behavior pivots on retail calendars.
+# ─────────────────────────────────────────────────────────────────────────────
+
+retail_moments:
+  - name: "Sephora VIB Sale (Spring)"
+    date_pattern: "mid-April (spring) + early November (fall)"
+    confidence: high
+    friction_hints:
+      - "consumer cart-building → 'is this routine the right size' content spike"
+      - "K-Beauty discounts surface; cross-brand routine assembly questions"
+    keywords: [Sephora, VIB sale, skincare haul]
+
+  - name: "Amazon Prime Day"
+    date_pattern: "mid-July (sometimes split-event)"
+    confidence: high
+    friction_hints:
+      - "ingredient-led shopping (consumers searching by retinol/niacinamide etc.)"
+      - "tabular comparison + chemist-review content spikes"
+    keywords: [Prime Day, Amazon, sale]
+
+  - name: "Cyber Monday + holiday gift-set window"
+    date_pattern: "Monday after Thanksgiving through mid-December"
+    confidence: high
+    friction_hints:
+      - "skincare-as-gift content peaks (palette logic, holiday boxes)"
+      - "first-time-trying-K-Beauty surge via gift-set entry points"
+    keywords: [Cyber Monday, gift sets, holiday gifting]
