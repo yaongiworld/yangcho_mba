@@ -91,10 +91,6 @@ from pipeline.version import prompt_version
 
 logger = logging.getLogger(__name__)
 
-# Top N moments to actually run friction analysis on per day.
-# More than this and the daily LLM cost grows past the budget.
-TOP_N_FOR_FRICTION = 10
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 1: Ingest — three sources, graceful per-source
@@ -293,17 +289,55 @@ def stage_score_moments(moments: list[ExtractedMoment]) -> list[ExtractedMoment]
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# Per-source quotas — picks N moments per source from the top of the
+# score-sorted list. With three sources of unequal volume (calendar ~8
+# moments/day, TikTok 10-20, Google Trends 10), a pure score-sort would
+# let calendar's confidence bonus crowd out the other sources. Quotas
+# guarantee multi-source diversity on the daily dashboard. The total
+# (10) caps daily LLM friction-analysis spend.
+SOURCE_QUOTAS: dict[SourceKind, int] = {
+    SourceKind.CALENDAR: 5,
+    SourceKind.TIKTOK: 3,
+    SourceKind.GOOGLE_TRENDS: 2,
+}
+
+
+def _select_top_by_source_quota(
+    moments: list[ExtractedMoment],
+) -> list[ExtractedMoment]:
+    """Take SOURCE_QUOTAS[source] highest-scored moments per source.
+
+    `moments` is pre-sorted by score desc (from stage_score_moments). We
+    walk it once, filling each source's quota as we go. Slots a source
+    can't fill (e.g. zero Google Trends moments today) are left empty,
+    not redistributed — keeps the math predictable and means a quiet
+    source doesn't accidentally drown the dashboard."""
+    quotas_left = dict(SOURCE_QUOTAS)
+    out: list[ExtractedMoment] = []
+    for m in moments:
+        remaining = quotas_left.get(m.source, 0)
+        if remaining > 0:
+            out.append(m)
+            quotas_left[m.source] = remaining - 1
+        if not any(v > 0 for v in quotas_left.values()):
+            break
+    return out
+
+
 async def stage_analyze_friction(
     moments: list[ExtractedMoment],
-    top_n: int = TOP_N_FOR_FRICTION,
 ) -> list[tuple[ExtractedMoment, FrictionAnalysis | None]]:
     """Run the friction prompt across the top N moments in parallel.
+
+    Selection uses per-source quotas (see SOURCE_QUOTAS above) so the daily
+    brief always reflects multi-source coverage rather than letting one
+    high-volume source dominate.
 
     None entries in the returned list mean that moment's LLM call failed —
     they're tracked in items_succeeded so pipeline_runs reflects partial.
     """
     with record_stage(PipelineStage.ANALYZE_FRICTION) as h:
-        targets = moments[:top_n]
+        targets = _select_top_by_source_quota(moments)
         h.items_processed = len(targets)
 
         tasks = [
