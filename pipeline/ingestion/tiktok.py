@@ -222,31 +222,189 @@ def _payload_to_signals(payload: Any) -> list[RawSignal]:
     return out
 
 
-async def fetch_tiktok_signals() -> list[RawSignal]:
-    """Public entrypoint. Fetch fresh; on failure, fall back to last-known-good.
+# ─────────────────────────────────────────────────────────────────────────────
+# /api/discover/challenge — the *consumer* TikTok discover endpoint.
+#
+# Different from Creative Center: this is what tiktok.com/discover hits when
+# you visit it logged-out in a regular browser. No country_code parameter —
+# geo is inferred from the requester IP. On GH Actions runners (US), this
+# yields US-flavored trending hashtags. Schema is documented inline below.
+# ─────────────────────────────────────────────────────────────────────────────
 
-    Async because the orchestrator runs inside an asyncio event loop (the
-    friction analyzer fans out via asyncio.gather). The playwright client
-    is itself async, so we await it directly rather than spawning a nested
-    loop via asyncio.run().
+DISCOVER_URL = "https://www.tiktok.com/discover"
+DISCOVER_XHR_NEEDLE = "/api/discover/challenge/"
+
+
+async def _fetch_discover_via_playwright() -> Any:
+    """Hit tiktok.com/discover and capture the /api/discover/challenge XHR.
+
+    Same playwright pattern as _fetch_via_playwright, different page +
+    XHR path. Returns the raw JSON. Raises on capture failure.
+    """
+    from playwright.async_api import async_playwright  # local import
+
+    captured: Any = None
+    capture_event = asyncio.Event()
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        try:
+            ctx = await browser.new_context(
+                user_agent=USER_AGENT,
+                locale="en-US",
+                viewport={"width": 1280, "height": 900},
+            )
+            page = await ctx.new_page()
+
+            async def on_response(response):
+                nonlocal captured
+                if DISCOVER_XHR_NEEDLE in response.url and 200 <= response.status < 300:
+                    try:
+                        body = await response.json()
+                    except Exception as exc:
+                        logger.warning("tiktok_discover: body not JSON: %s", exc)
+                        return
+                    captured = body
+                    capture_event.set()
+
+            page.on("response", on_response)
+            await page.goto(DISCOVER_URL, wait_until="networkidle", timeout=60_000)
+            try:
+                await asyncio.wait_for(capture_event.wait(), timeout=XHR_WAIT_SECONDS)
+            except asyncio.TimeoutError:
+                pass
+            if captured is None:
+                raise RuntimeError(
+                    f"tiktok_discover: no XHR matching {DISCOVER_XHR_NEEDLE!r} captured "
+                    f"after {XHR_WAIT_SECONDS}s"
+                )
+            return captured
+        finally:
+            await browser.close()
+
+
+def _parse_discover_challenges(payload: Any) -> list[dict[str, Any]]:
+    """Extract trending hashtags from the /api/discover/challenge response.
+
+    Schema verified live on 2026-05-18:
+        {
+          "challengeInfoList": [
+            {
+              "challenge": {
+                "id": "<num>",
+                "title": "<hashtag>",
+                "desc": "<long description>",
+                "stats": { "videoCount": N, "viewCount": N }
+              },
+              "itemList": [<sample videos>]
+            },
+            ...
+          ]
+        }
+    """
+    if not isinstance(payload, dict):
+        return []
+    items = payload.get("challengeInfoList")
+    if not isinstance(items, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for entry in items:
+        if not isinstance(entry, dict):
+            continue
+        ch = entry.get("challenge")
+        if not isinstance(ch, dict):
+            continue
+        title = ch.get("title")
+        if not title:
+            continue
+        stats = ch.get("stats") if isinstance(ch.get("stats"), dict) else {}
+        out.append(
+            {
+                "hashtag_name": title,
+                "id": ch.get("id"),
+                "desc": ch.get("desc") or "",
+                "video_cnt": stats.get("videoCount"),
+                "view_cnt": stats.get("viewCount"),
+            }
+        )
+    return out
+
+
+def _discover_to_raw_signals(hashtags: list[dict[str, Any]]) -> list[RawSignal]:
+    """Normalize discover-API hashtag entries into RawSignals.
+
+    Records source=TIKTOK so the downstream pipeline treats discover-sourced
+    signals identically to Creative Center signals. The metadata.endpoint
+    field disambiguates for debugging.
+    """
+    out: list[RawSignal] = []
+    fetched_at = datetime.now(timezone.utc)
+    for h in hashtags:
+        name = h["hashtag_name"]
+        out.append(
+            RawSignal(
+                source=SourceKind.TIKTOK,
+                external_id=f"tiktok:discover:{name}",
+                text=f"#{name}",
+                created_at=fetched_at,
+                metadata={
+                    "hashtag": name,
+                    "endpoint": "discover",
+                    "id": h.get("id"),
+                    "desc": h.get("desc"),
+                    "video_count": h.get("video_cnt"),
+                    "view_count": h.get("view_cnt"),
+                },
+            )
+        )
+    return out
+
+
+async def fetch_tiktok_signals() -> list[RawSignal]:
+    """Public entrypoint. Try discover → Creative Center → cache.
+
+    Order of attempts:
+      1. /api/discover/challenge (newer, currently working as of 2026-05-18).
+      2. Creative Center XHR (older, currently returning 50004 errors).
+      3. signals_cache last-known-good.
 
     Always returns a list. Never raises — TikTok failure is the most expected
     failure mode in the whole system, so the caller sees it as "no signal
     today" and continues.
     """
+    # Path 1: discover endpoint.
+    try:
+        payload = await _fetch_discover_via_playwright()
+        hashtags = _parse_discover_challenges(payload)
+        if hashtags:
+            signals = _discover_to_raw_signals(hashtags)
+            cache_put(SourceKind.TIKTOK, _signals_to_payload(signals))
+            logger.info(
+                "tiktok: fetched %d trending hashtags from /discover", len(signals),
+            )
+            return signals
+        logger.warning("tiktok: /discover payload had no parseable challenges")
+    except Exception as exc:
+        logger.warning("tiktok: /discover fetch failed: %s", exc)
+
+    # Path 2: Creative Center fallback (works when TikTok's backend is happy).
     try:
         payload = await _fetch_via_playwright()
         hashtags = _parse_hashtags(payload)
         if not hashtags:
-            logger.warning("tiktok: payload captured but no hashtags parsed; trying cache")
-            raise RuntimeError("empty hashtag list from XHR")
+            logger.warning("tiktok: Creative Center payload had no parseable hashtags")
+            raise RuntimeError("empty hashtag list from Creative Center XHR")
         signals = _to_raw_signals(hashtags)
         cache_put(SourceKind.TIKTOK, _signals_to_payload(signals))
-        logger.info("tiktok: fetched %d trending hashtags", len(signals))
+        logger.info(
+            "tiktok: fetched %d trending hashtags from Creative Center (fallback)",
+            len(signals),
+        )
         return signals
     except Exception as exc:
-        logger.warning("tiktok: live fetch failed: %s", exc)
+        logger.warning("tiktok: Creative Center fallback failed: %s", exc)
 
+    # Path 3: last-known-good cache.
     cached = cache_get_last_resort(SourceKind.TIKTOK)
     if cached is None:
         logger.warning("tiktok: no cached fallback; returning empty")

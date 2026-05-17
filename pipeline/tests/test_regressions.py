@@ -93,7 +93,11 @@ def test_iron_rule_2_tiktok_failure_returns_empty_not_raises() -> None:
     async def boom():
         raise RuntimeError("simulated playwright failure")
 
-    with patch.object(tiktok_mod, "_fetch_via_playwright", side_effect=boom):
+    # fetch_tiktok_signals tries the /discover endpoint first, then Creative
+    # Center, then the signals_cache. Mock both fetch paths into raising so
+    # graceful-degradation has nothing live to lean on.
+    with patch.object(tiktok_mod, "_fetch_discover_via_playwright", side_effect=boom), \
+         patch.object(tiktok_mod, "_fetch_via_playwright", side_effect=boom):
         result = asyncio.run(tiktok_mod.fetch_tiktok_signals())
 
     assert result == [], "must return empty list, not raise"
