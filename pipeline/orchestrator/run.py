@@ -427,9 +427,86 @@ async def run_daily(today: date_t | None = None) -> int:
     # Stage 5 — persist.
     await stage_persist(today, results)
 
+    # Stage 6 — backfill matches for approved frictions that have none.
+    # Catches Yangcho's manual approves via /admin between cron ticks.
+    await stage_backfill_matches()
+
     last = last_successful_run_at()
     logger.info("=== LLC pipeline done. Last successful run: %s ===", last)
     return 0
+
+
+async def stage_backfill_matches() -> None:
+    """Find approved frictions with zero matches and run product matching on them.
+
+    This is the catch-up path for the manual-approve workflow: Yangcho
+    flips a friction to approved via /admin, which doesn't trigger matching
+    synchronously (that would block the request and require Anthropic
+    creds in the dashboard process). Instead the next cron tick reconciles.
+
+    Wrapped in record_stage so the operator can see backfill runs in the
+    pipeline_runs table alongside the regular daily flow.
+    """
+    with record_stage(PipelineStage.MATCH_PRODUCT) as h:
+        try:
+            client = supabase_client()
+        except Exception as exc:
+            logger.warning("backfill: cannot reach Supabase: %s", exc)
+            h.items_processed = 0
+            h.items_succeeded = 0
+            return
+
+        # Find all approved friction ids.
+        approved = (
+            client.table("frictions")
+            .select("id, friction_summary, mechanism, efficacy_class")
+            .eq("review_status", "approved")
+            .execute()
+            .data
+            or []
+        )
+        approved_ids = {f["id"] for f in approved}
+        if not approved_ids:
+            h.items_processed = 0
+            h.items_succeeded = 0
+            return
+
+        # Find which approved friction ids already have at least one match.
+        matched = (
+            client.table("matches")
+            .select("friction_id")
+            .in_("friction_id", list(approved_ids))
+            .execute()
+            .data
+            or []
+        )
+        already_matched_ids = {m["friction_id"] for m in matched}
+
+        to_match = [f for f in approved if f["id"] not in already_matched_ids]
+        h.items_processed = len(to_match)
+        if not to_match:
+            h.items_succeeded = 0
+            return
+
+        logger.info(
+            "backfill: %d approved friction(s) missing matches",
+            len(to_match),
+        )
+
+        # Lazy import to avoid a cycle (FrictionItem lives in schemas).
+        from pipeline.schemas import FrictionItem
+
+        version = prompt_version()
+        succeeded = 0
+        for row in to_match:
+            friction = FrictionItem(
+                summary=row["friction_summary"],
+                mechanism=row["mechanism"],
+                efficacy_class=row.get("efficacy_class"),
+            )
+            await _persist_matches_for_friction(client, row["id"], friction, version)
+            succeeded += 1
+        h.items_succeeded = succeeded
 
 
 def main(argv: list[str] | None = None) -> int:

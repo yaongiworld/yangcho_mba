@@ -45,3 +45,12 @@ export function createServerClient() {
     },
   });
 }
+
+// NOTE: there is intentionally NO admin/service-role client factory here.
+// The SUPABASE_SECRET_KEY is kept out of the dashboard's env surface entirely
+// to avoid widening the trust boundary (it would otherwise live in Vercel's
+// shared env, where any team member could see it and a misplaced client
+// import could leak it into the browser bundle). Admin reads instead go
+// through the publishable key + RLS policies relaxed in migration 0005;
+// /admin remains an unlinked URL-obscurity surface until Supabase Auth
+// lands in W7 and we can tighten RLS to authed-admin-only reads.

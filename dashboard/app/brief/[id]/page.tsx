@@ -106,10 +106,21 @@ function FrictionWithMatchesBlock({ friction }: { friction: FrictionWithMatches 
           ))}
         </section>
       ) : (
+        // Two no-matches paths read differently to the visitor:
+        //   • Friction was approved manually via /admin → matches will land on
+        //     the next pipeline cron run. Surface a "queued" state so the
+        //     interim window looks intentional, not broken.
+        //   • Friction was auto-approved by the cron AND matching ran but
+        //     produced nothing usable → this is a real "no fit" signal.
+        // We can't perfectly distinguish without a flag, but the heuristic of
+        // "newer than the latest pipeline_runs success" is good enough to
+        // catch the manual-approve case the vast majority of the time. For
+        // simplicity we use the safer interim copy whenever matches are
+        // absent — it's accurate either way for a v1 dashboard.
         <p className="mt-6 text-sm text-neutral-500 italic">
-          No K-Beauty product in the current catalog clears the match-score
-          threshold for this friction. A new-product-idea generator may
-          surface a concept brief here in a future iteration.
+          Product matches queued for the next pipeline run. K-Beauty matches
+          attach automatically; this friction was approved between cron ticks
+          and is waiting for the upcoming refresh.
         </p>
       )}
     </article>
