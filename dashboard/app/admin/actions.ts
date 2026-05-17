@@ -66,3 +66,46 @@ export async function approveFriction(frictionId: number): Promise<ReviewActionR
 export async function rejectFriction(frictionId: number): Promise<ReviewActionResult> {
   return setReviewStatus(frictionId, "rejected");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Playbook approve/reject — same shape as friction actions, different table.
+// Enabled by migration 0007 (anon UPDATE policy on playbook_outputs).
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function setPlaybookReviewStatus(
+  playbookId: number,
+  status: "approved" | "rejected",
+): Promise<ReviewActionResult> {
+  if (!Number.isFinite(playbookId) || playbookId <= 0) {
+    return { ok: false, error: "invalid playbook id" };
+  }
+
+  const supabase = createServerClient();
+  // Same as the friction action — typed update narrows to `never` on the
+  // generated supabase types; cast at the boundary.
+  const update = {
+    review_status: status,
+    reviewed_at: new Date().toISOString(),
+  } as never;
+  const { error } = await supabase
+    .from("playbook_outputs")
+    .update(update)
+    .eq("id", playbookId);
+
+  if (error) {
+    return { ok: false, error: error.message };
+  }
+
+  revalidatePath("/admin");
+  revalidatePath("/trends");
+  revalidatePath("/");
+  return { ok: true };
+}
+
+export async function approvePlaybook(playbookId: number): Promise<ReviewActionResult> {
+  return setPlaybookReviewStatus(playbookId, "approved");
+}
+
+export async function rejectPlaybook(playbookId: number): Promise<ReviewActionResult> {
+  return setPlaybookReviewStatus(playbookId, "rejected");
+}

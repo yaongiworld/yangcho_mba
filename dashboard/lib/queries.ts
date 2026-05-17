@@ -99,13 +99,49 @@ export interface PublicMatch {
   product: PublicProduct;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Playbook output bodies — three flavors, JSON-shaped, gated by `kind`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface MarketingPostBody {
+  headline: string;
+  body: string;
+  call_to_action: string;
+}
+
+export interface ProductIdeaBody {
+  concept_name: string;
+  target_friction: string;
+  hero_mechanism: string;
+  hero_ingredient_class: string;
+  target_consumer_profile: string;
+  competitive_white_space: string;
+}
+
+export interface InfluencerSuggestionEntry {
+  creator_handle: string;
+  reasoning: string;
+  public_evidence: string;
+}
+
+export interface InfluencerOutputBody {
+  suggestions: InfluencerSuggestionEntry[];
+}
+
 export interface FrictionWithMatches extends PublicFriction {
   matches: PublicMatch[];
+  /** Approved marketing post for this friction, if any. */
+  marketing_post: MarketingPostBody | null;
+  /** Approved new-product idea for this friction, if any. */
+  product_idea: ProductIdeaBody | null;
 }
 
 export async function getBriefByMomentId(momentId: number): Promise<{
   moment: PublicMoment;
   frictions: FrictionWithMatches[];
+  /** Influencer suggestions for the whole moment (anchored to its first
+   *  approved friction in storage). Null when no approved suggestions exist. */
+  influencer_suggestions: InfluencerOutputBody | null;
 } | null> {
   const supabase = createServerClient();
 
@@ -125,9 +161,13 @@ export async function getBriefByMomentId(momentId: number): Promise<{
     .eq("moment_id", momentId)
     .eq("review_status", "approved")
     .order("id");
-  if (frictionErr || !frictionData) return { moment, frictions: [] };
+  if (frictionErr || !frictionData) {
+    return { moment, frictions: [], influencer_suggestions: null };
+  }
   const frictions = frictionData as PublicFriction[];
-  if (frictions.length === 0) return { moment, frictions: [] };
+  if (frictions.length === 0) {
+    return { moment, frictions: [], influencer_suggestions: null };
+  }
 
   // 3) Matches for those frictions, joined to products.
   const frictionIds = frictions.map((f) => f.id);
@@ -138,7 +178,18 @@ export async function getBriefByMomentId(momentId: number): Promise<{
     )
     .in("friction_id", frictionIds)
     .order("rank");
-  if (matchErr) return { moment, frictions: frictions.map((f) => ({ ...f, matches: [] })) };
+  if (matchErr) {
+    return {
+      moment,
+      frictions: frictions.map((f) => ({
+        ...f,
+        matches: [],
+        marketing_post: null,
+        product_idea: null,
+      })),
+      influencer_suggestions: null,
+    };
+  }
 
   type MatchRow = {
     id: number;
@@ -166,12 +217,48 @@ export async function getBriefByMomentId(momentId: number): Promise<{
     byFriction.set(m.friction_id, arr);
   }
 
+  // 4) Playbook outputs (3 kinds) for those frictions. Approved only.
+  const { data: playbookData } = await supabase
+    .from("playbook_outputs")
+    .select("id, friction_id, kind, body")
+    .in("friction_id", frictionIds)
+    .eq("review_status", "approved");
+
+  type PlaybookRow = {
+    id: number;
+    friction_id: number;
+    kind: "marketing_post" | "product_idea" | "influencer";
+    body: Record<string, unknown>;
+  };
+  const playbook = (playbookData ?? []) as unknown as PlaybookRow[];
+
+  const marketingByFriction = new Map<number, MarketingPostBody>();
+  const ideaByFriction = new Map<number, ProductIdeaBody>();
+  let influencerSuggestions: InfluencerOutputBody | null = null;
+
+  for (const p of playbook) {
+    if (p.kind === "marketing_post") {
+      marketingByFriction.set(p.friction_id, p.body as unknown as MarketingPostBody);
+    } else if (p.kind === "product_idea") {
+      ideaByFriction.set(p.friction_id, p.body as unknown as ProductIdeaBody);
+    } else if (p.kind === "influencer") {
+      // Per-moment, anchored to the first friction's id. Pick whichever we find.
+      influencerSuggestions = p.body as unknown as InfluencerOutputBody;
+    }
+  }
+
   const frictionsWithMatches: FrictionWithMatches[] = frictions.map((f) => ({
     ...f,
     matches: byFriction.get(f.id) ?? [],
+    marketing_post: marketingByFriction.get(f.id) ?? null,
+    product_idea: ideaByFriction.get(f.id) ?? null,
   }));
 
-  return { moment, frictions: frictionsWithMatches };
+  return {
+    moment,
+    frictions: frictionsWithMatches,
+    influencer_suggestions: influencerSuggestions,
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -407,6 +494,89 @@ export async function getPendingFrictions(): Promise<PendingFrictionEntry[]> {
       created_at: f.created_at,
     };
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pending playbook queue — extends the admin review surface to cover the
+// three playbook kinds. Each kind's body shape lives behind a discriminated
+// union; the page renders per kind.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type PlaybookKind = "marketing_post" | "product_idea" | "influencer";
+
+export interface PendingPlaybookEntry {
+  playbook_id: number;
+  kind: PlaybookKind;
+  friction_id: number;
+  moment_id: number;
+  moment_name: string;
+  moment_date: string;
+  friction_summary: string;
+  body: MarketingPostBody | ProductIdeaBody | InfluencerOutputBody;
+  created_at: string;
+}
+
+export async function getPendingPlaybook(): Promise<PendingPlaybookEntry[]> {
+  const supabase = createServerClient();
+
+  const { data: playbookRows, error } = await supabase
+    .from("playbook_outputs")
+    .select("id, friction_id, kind, body, created_at")
+    .eq("review_status", "pending")
+    .order("created_at", { ascending: false })
+    .limit(200);
+  if (error || !playbookRows || playbookRows.length === 0) return [];
+
+  type PlaybookLite = {
+    id: number;
+    friction_id: number;
+    kind: PlaybookKind;
+    body: Record<string, unknown>;
+    created_at: string;
+  };
+  const playbook = playbookRows as unknown as PlaybookLite[];
+
+  // Hydrate friction context (summary + moment_id) for every entry.
+  const frictionIds = Array.from(new Set(playbook.map((p) => p.friction_id)));
+  const { data: frictionRows } = await supabase
+    .from("frictions")
+    .select("id, moment_id, friction_summary")
+    .in("id", frictionIds);
+  type FrictionLite = { id: number; moment_id: number; friction_summary: string };
+  const frictions = (frictionRows ?? []) as unknown as FrictionLite[];
+  const frictionById = new Map(frictions.map((f) => [f.id, f]));
+
+  // Hydrate moment names + dates.
+  const momentIds = Array.from(new Set(frictions.map((f) => f.moment_id)));
+  const { data: momentRows } = await supabase
+    .from("moments")
+    .select("id, name, moment_date")
+    .in("id", momentIds);
+  type MomentLite = { id: number; name: string; moment_date: string };
+  const moments = (momentRows ?? []) as unknown as MomentLite[];
+  const momentById = new Map(moments.map((m) => [m.id, m]));
+
+  return playbook
+    .map((p) => {
+      const f = frictionById.get(p.friction_id);
+      if (!f) return null;
+      const m = momentById.get(f.moment_id);
+      return {
+        playbook_id: p.id,
+        kind: p.kind,
+        friction_id: p.friction_id,
+        moment_id: f.moment_id,
+        moment_name: m?.name ?? `(missing moment ${f.moment_id})`,
+        moment_date: m?.moment_date ?? "",
+        friction_summary: f.friction_summary,
+        // Body shape is known per-kind at runtime; we trust the writer
+        // (pipeline) to put the right JSON in based on `kind`. The
+        // dashboard discriminates on kind to pick the rendering.
+        body: p.body as unknown as PendingPlaybookEntry["body"],
+        created_at: p.created_at,
+      } satisfies PendingPlaybookEntry;
+    })
+    .filter((e): e is PendingPlaybookEntry => e !== null);
 }
 
 export interface AdminMomentEntry {

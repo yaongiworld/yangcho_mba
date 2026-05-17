@@ -14,7 +14,13 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { getBriefByMomentId } from "@/lib/queries";
-import type { FrictionWithMatches, PublicMatch } from "@/lib/queries";
+import type {
+  FrictionWithMatches,
+  InfluencerOutputBody,
+  MarketingPostBody,
+  ProductIdeaBody,
+  PublicMatch,
+} from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -39,7 +45,7 @@ export default async function BriefDetailPage({
 
   const result = await getBriefByMomentId(momentId);
   if (!result) notFound();
-  const { moment, frictions } = result;
+  const { moment, frictions, influencer_suggestions } = result;
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-16">
@@ -67,6 +73,10 @@ export default async function BriefDetailPage({
             <FrictionWithMatchesBlock key={friction.id} friction={friction} />
           ))}
         </section>
+      )}
+
+      {influencer_suggestions && influencer_suggestions.suggestions.length > 0 && (
+        <InfluencerSection body={influencer_suggestions} />
       )}
 
       <footer className="mt-20 border-t border-neutral-200 pt-6 text-xs text-neutral-500">
@@ -123,7 +133,92 @@ function FrictionWithMatchesBlock({ friction }: { friction: FrictionWithMatches 
           and is waiting for the upcoming refresh.
         </p>
       )}
+
+      {/* Marketing post: surfaces when a post has been approved for this friction. */}
+      {friction.marketing_post && <MarketingPostBlock post={friction.marketing_post} />}
+
+      {/* Product idea: only when the AI couldn't find a strong catalog match. */}
+      {friction.product_idea && <ProductIdeaBlock idea={friction.product_idea} />}
     </article>
+  );
+}
+
+function MarketingPostBlock({ post }: { post: MarketingPostBody }) {
+  return (
+    <section className="mt-10 rounded-lg border border-neutral-300 bg-neutral-50 p-6">
+      <p className="text-xs uppercase tracking-wide text-neutral-500 mb-3">
+        Marketing post draft
+      </p>
+      <h3 className="text-2xl font-semibold leading-tight text-neutral-900">
+        {post.headline}
+      </h3>
+      <p className="mt-4 text-neutral-800 leading-relaxed whitespace-pre-line">
+        {post.body}
+      </p>
+      <p className="mt-4 text-sm font-medium uppercase tracking-wide text-neutral-700">
+        {post.call_to_action}
+      </p>
+    </section>
+  );
+}
+
+function ProductIdeaBlock({ idea }: { idea: ProductIdeaBody }) {
+  return (
+    <section className="mt-10 rounded-lg border border-amber-300 bg-amber-50 p-6">
+      <p className="text-xs uppercase tracking-wide text-amber-700 mb-2">
+        K-Beauty white space — concept brief
+      </p>
+      <h3 className="text-xl font-semibold leading-tight text-neutral-900">
+        {idea.concept_name}
+      </h3>
+      <p className="mt-2 text-sm text-neutral-700 italic">{idea.target_friction}</p>
+
+      <dl className="mt-5 space-y-4 text-sm text-neutral-800 leading-relaxed">
+        <Detail label="Hero mechanism" value={idea.hero_mechanism} />
+        <Detail label="Hero ingredient class" value={idea.hero_ingredient_class} />
+        <Detail label="Target consumer" value={idea.target_consumer_profile} />
+        <Detail label="Competitive white space" value={idea.competitive_white_space} />
+      </dl>
+    </section>
+  );
+}
+
+function Detail({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-xs uppercase tracking-wide text-neutral-500 mb-1">{label}</dt>
+      <dd className="text-neutral-800">{value}</dd>
+    </div>
+  );
+}
+
+function InfluencerSection({ body }: { body: InfluencerOutputBody }) {
+  return (
+    <section className="mt-16 border-t border-neutral-200 pt-8">
+      <p className="text-xs uppercase tracking-wide text-neutral-500 mb-2">
+        Influencer suggestions
+      </p>
+      <h2 className="text-2xl font-semibold leading-tight">
+        Creators who already live in this moment
+      </h2>
+      <p className="mt-2 text-sm text-neutral-500">
+        Public-content matches from a web search. Suggestions are based on
+        public content categories, not endorsements; no creator has been
+        contacted.
+      </p>
+
+      <ul className="mt-6 space-y-6">
+        {body.suggestions.map((s, i) => (
+          <li key={`${s.creator_handle}-${i}`} className="rounded-lg border border-neutral-200 p-5">
+            <p className="text-base font-semibold">{s.creator_handle}</p>
+            <p className="mt-2 text-sm text-neutral-800 leading-relaxed">{s.reasoning}</p>
+            <p className="mt-3 text-xs text-neutral-500 break-all">
+              {s.public_evidence}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
