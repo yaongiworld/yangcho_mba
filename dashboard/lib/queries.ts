@@ -583,6 +583,227 @@ export async function getRecentPipelineRunGroups(
   return groupPipelineRuns(data as unknown as PipelineRunRow[]);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Paginated admin queries — slice + total count for each section so the page
+// can render Prev/Next controls without holding the full list in memory.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface Page<T> {
+  rows: T[];
+  total: number;
+}
+
+/** Paginated pipeline-run groups. Note: the page slice is applied to the
+ *  raw pipeline_runs rows, then grouped — which means a single cron tick
+ *  may end up split across pages on rare edge cases (e.g. page boundary
+ *  cuts a 6-stage run in half). For portfolio scale this is fine; clean
+ *  fix would be per-group pagination, which needs a subquery. */
+export async function getPipelineRunGroupsPage(
+  offset: number,
+  pageSize: number,
+): Promise<Page<PipelineRunGroup>> {
+  const supabase = createServerClient();
+  const { data, error, count } = await supabase
+    .from("pipeline_runs")
+    .select(
+      "id, stage, status, started_at, finished_at, items_processed, items_succeeded, error_message, code_version",
+      { count: "exact" },
+    )
+    .order("started_at", { ascending: false })
+    .range(offset, offset + pageSize - 1);
+  if (error || !data) return { rows: [], total: count ?? 0 };
+  return {
+    rows: groupPipelineRuns(data as unknown as PipelineRunRow[]),
+    total: count ?? 0,
+  };
+}
+
+export async function getPendingFrictionsPage(
+  offset: number,
+  pageSize: number,
+): Promise<Page<PendingFrictionEntry>> {
+  const supabase = createServerClient();
+  const { data: frictionRows, error, count } = await supabase
+    .from("frictions")
+    .select(
+      "id, moment_id, friction_summary, mechanism, efficacy_class, self_rating, created_at",
+      { count: "exact" },
+    )
+    .eq("review_status", "pending")
+    .order("self_rating", { ascending: false })
+    .order("created_at", { ascending: false })
+    .range(offset, offset + pageSize - 1);
+  if (error || !frictionRows || frictionRows.length === 0) {
+    return { rows: [], total: count ?? 0 };
+  }
+  type FrictionLite = {
+    id: number;
+    moment_id: number;
+    friction_summary: string;
+    mechanism: string;
+    efficacy_class: string | null;
+    self_rating: number;
+    created_at: string;
+  };
+  const frictions = frictionRows as unknown as FrictionLite[];
+
+  const momentIds = Array.from(new Set(frictions.map((f) => f.moment_id)));
+  const { data: momentRows } = await supabase
+    .from("moments")
+    .select("id, name, moment_date")
+    .in("id", momentIds);
+  type MomentLite = { id: number; name: string; moment_date: string };
+  const moments = (momentRows ?? []) as unknown as MomentLite[];
+  const byId = new Map(moments.map((m) => [m.id, m]));
+
+  return {
+    rows: frictions.map((f) => {
+      const m = byId.get(f.moment_id);
+      return {
+        friction_id: f.id,
+        moment_id: f.moment_id,
+        moment_name: m?.name ?? `(missing moment ${f.moment_id})`,
+        moment_date: m?.moment_date ?? "",
+        friction_summary: f.friction_summary,
+        mechanism: f.mechanism,
+        efficacy_class: f.efficacy_class,
+        self_rating: f.self_rating,
+        created_at: f.created_at,
+      };
+    }),
+    total: count ?? 0,
+  };
+}
+
+export async function getPendingPlaybookPage(
+  offset: number,
+  pageSize: number,
+): Promise<Page<PendingPlaybookEntry>> {
+  const supabase = createServerClient();
+  const { data: playbookRows, error, count } = await supabase
+    .from("playbook_outputs")
+    .select("id, friction_id, kind, body, created_at", { count: "exact" })
+    .eq("review_status", "pending")
+    .order("created_at", { ascending: false })
+    .range(offset, offset + pageSize - 1);
+  if (error || !playbookRows || playbookRows.length === 0) {
+    return { rows: [], total: count ?? 0 };
+  }
+
+  type PlaybookLite = {
+    id: number;
+    friction_id: number;
+    kind: PlaybookKind;
+    body: Record<string, unknown>;
+    created_at: string;
+  };
+  const playbook = playbookRows as unknown as PlaybookLite[];
+
+  const frictionIds = Array.from(new Set(playbook.map((p) => p.friction_id)));
+  const { data: frictionRows } = await supabase
+    .from("frictions")
+    .select("id, moment_id, friction_summary")
+    .in("id", frictionIds);
+  type FrictionLite = { id: number; moment_id: number; friction_summary: string };
+  const frictions = (frictionRows ?? []) as unknown as FrictionLite[];
+  const frictionById = new Map(frictions.map((f) => [f.id, f]));
+
+  const momentIds = Array.from(new Set(frictions.map((f) => f.moment_id)));
+  const { data: momentRows } = await supabase
+    .from("moments")
+    .select("id, name, moment_date")
+    .in("id", momentIds);
+  type MomentLite = { id: number; name: string; moment_date: string };
+  const moments = (momentRows ?? []) as unknown as MomentLite[];
+  const momentById = new Map(moments.map((m) => [m.id, m]));
+
+  return {
+    rows: playbook
+      .map((p) => {
+        const f = frictionById.get(p.friction_id);
+        if (!f) return null;
+        const m = momentById.get(f.moment_id);
+        return {
+          playbook_id: p.id,
+          kind: p.kind,
+          friction_id: p.friction_id,
+          moment_id: f.moment_id,
+          moment_name: m?.name ?? `(missing moment ${f.moment_id})`,
+          moment_date: m?.moment_date ?? "",
+          friction_summary: f.friction_summary,
+          body: p.body as unknown as PendingPlaybookEntry["body"],
+          created_at: p.created_at,
+        } satisfies PendingPlaybookEntry;
+      })
+      .filter((e): e is PendingPlaybookEntry => e !== null),
+    total: count ?? 0,
+  };
+}
+
+export async function getAllMomentsAdminPage(
+  offset: number,
+  pageSize: number,
+): Promise<Page<AdminMomentEntry>> {
+  const supabase = createServerClient();
+  const { data: momentRows, error, count } = await supabase
+    .from("moments")
+    .select(
+      "id, name, source, description, trend_velocity, score, moment_date, created_at",
+      { count: "exact" },
+    )
+    .order("created_at", { ascending: false })
+    .range(offset, offset + pageSize - 1);
+  if (error || !momentRows) return { rows: [], total: count ?? 0 };
+  const moments = momentRows as unknown as PublicMoment[];
+
+  // Hydrate friction + match counts only for this page's moments.
+  const momentIds = moments.map((m) => m.id);
+  const { data: frictionRows } = await supabase
+    .from("frictions")
+    .select("id, moment_id, review_status")
+    .in("moment_id", momentIds);
+  type FrictionLite = { id: number; moment_id: number; review_status: string };
+  const frictions = (frictionRows ?? []) as unknown as FrictionLite[];
+
+  const allFrictionIds = frictions.map((f) => f.id);
+  const { data: matchRows } = allFrictionIds.length
+    ? await supabase
+        .from("matches")
+        .select("friction_id")
+        .in("friction_id", allFrictionIds)
+    : { data: [] as { friction_id: number }[] };
+  const matches = (matchRows ?? []) as unknown as { friction_id: number }[];
+
+  const fricByMom = new Map<number, FrictionLite[]>();
+  for (const f of frictions) {
+    const arr = fricByMom.get(f.moment_id) ?? [];
+    arr.push(f);
+    fricByMom.set(f.moment_id, arr);
+  }
+  const matchCountByMom = new Map<number, number>();
+  const frictionMomentLookup = new Map<number, number>();
+  for (const f of frictions) frictionMomentLookup.set(f.id, f.moment_id);
+  for (const m of matches) {
+    const momId = frictionMomentLookup.get(m.friction_id);
+    if (momId == null) continue;
+    matchCountByMom.set(momId, (matchCountByMom.get(momId) ?? 0) + 1);
+  }
+
+  return {
+    rows: moments.map((m) => {
+      const fric = fricByMom.get(m.id) ?? [];
+      return {
+        moment: m,
+        friction_count: fric.length,
+        approved_count: fric.filter((f) => f.review_status === "approved").length,
+        pending_count: fric.filter((f) => f.review_status === "pending").length,
+        match_count: matchCountByMom.get(m.id) ?? 0,
+      };
+    }),
+    total: count ?? 0,
+  };
+}
+
 export interface PendingFrictionEntry {
   friction_id: number;
   moment_id: number;

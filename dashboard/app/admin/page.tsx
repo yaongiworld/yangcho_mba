@@ -1,22 +1,22 @@
 /**
- * Operator dashboard. Three sections:
- *   1. Recent pipeline runs — grouped by cron tick, with stage breakdowns.
- *   2. Pending review queue — frictions waiting for Yangcho's approval.
- *   3. All moments admin lens — every moment, including pending-only and
- *      no-friction rows, with status badges and click-through to /brief/[id].
+ * Operator dashboard.
  *
- * Auth: SKIPPED for now. The SUPABASE_SECRET_KEY is intentionally NOT in
- * the dashboard's env surface (see lib/supabase.ts). Instead, migration
- * 0005 relaxed the RLS policies on frictions/matches/playbook_outputs so
- * the publishable key can read all rows including pending content. /admin
- * is unlinked from the public site; security relies on URL obscurity +
- * Vercel password protection (when deployed).
+ * Four tabs, URL-routed:
+ *   ?tab=frictions  (default) — Pending friction review queue
+ *   ?tab=playbook            — Pending playbook items (marketing/idea/influencer)
+ *   ?tab=runs                — Recent pipeline run history
+ *   ?tab=moments             — All moments admin lens
  *
- * TRADE-OFF: a leaked /admin URL would expose all pending content.
+ * Each tab is independently paginated via ?page=N (1-indexed). The defaults
+ * keep the page small so it loads fast even when the queues grow.
  *
- * W7 plan: add Supabase Auth (magic link to Yangcho's email), revert
- * migration 0005, add a new RLS policy granting full read to her authed
- * user only. Then this page checks the session before rendering.
+ * Auth: gated upstream by middleware.ts (HMAC-signed session cookie set by
+ * /admin/login). The publishable Supabase key still respects RLS, but per
+ * migration 0005 it can read pending content. /admin is unlinked from the
+ * public site; security boundary is the login + middleware.
+ *
+ * W7 plan: Supabase Auth (magic link), revert 0005, RLS gates pending
+ * content to authed-admin reads.
  */
 
 import Link from "next/link";
@@ -28,12 +28,12 @@ import {
   rejectPlaybook,
 } from "@/app/admin/actions";
 import { signoutAction } from "@/app/admin/login/actions";
-import { triggerMatching } from "@/app/admin/trigger";
+import { TriggerButton } from "@/app/admin/TriggerButton";
 import {
-  getAllMomentsAdmin,
-  getPendingFrictions,
-  getPendingPlaybook,
-  getRecentPipelineRunGroups,
+  getAllMomentsAdminPage,
+  getPendingFrictionsPage,
+  getPendingPlaybookPage,
+  getPipelineRunGroupsPage,
 } from "@/lib/queries";
 import type {
   AdminMomentEntry,
@@ -47,6 +47,17 @@ import type {
 } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
+
+const PAGE_SIZE = 20;
+
+type TabKey = "frictions" | "playbook" | "runs" | "moments";
+const TAB_ORDER: TabKey[] = ["frictions", "playbook", "runs", "moments"];
+const TAB_LABEL: Record<TabKey, string> = {
+  frictions: "Friction approvals",
+  playbook: "Playbook approvals",
+  runs: "Pipeline runs",
+  moments: "All moments",
+};
 
 function fmtTime(iso: string): string {
   return new Date(iso).toLocaleString("en-US", {
@@ -96,18 +107,78 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-export default async function AdminPage() {
-  // Run queries in parallel.
-  const [runGroups, pending, pendingPlaybook, moments] = await Promise.all([
-    getRecentPipelineRunGroups(),
-    getPendingFrictions(),
-    getPendingPlaybook(),
-    getAllMomentsAdmin(),
-  ]);
+// ─────────────────────────────────────────────────────────────────────────────
+// Confidence badges for the friction queue.
+//
+// self_rating ranges 1–10. The pipeline auto-publishes ≥8 (no human gate);
+// the queue contains everything 1–7. Within the queue:
+//   * ≥6 — green ("close to threshold, prioritize")
+//   * 4–5 — yellow
+//   * <4 — plain
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ConfidenceBadge({ rating }: { rating: number }) {
+  let cls: string;
+  let label: string;
+  if (rating >= 6) {
+    cls = "text-emerald-700 bg-emerald-50 border-emerald-200";
+    label = `high · ${rating}/10`;
+  } else if (rating >= 4) {
+    cls = "text-amber-700 bg-amber-50 border-amber-200";
+    label = `medium · ${rating}/10`;
+  } else {
+    cls = "text-neutral-600 bg-neutral-50 border-neutral-200";
+    label = `low · ${rating}/10`;
+  }
+  return (
+    <span className={`inline-block text-xs font-mono uppercase tracking-wide px-2 py-0.5 border rounded ${cls}`}>
+      {label}
+    </span>
+  );
+}
+
+function parseTab(raw: string | string[] | undefined): TabKey {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  if (v && (TAB_ORDER as string[]).includes(v)) return v as TabKey;
+  return "frictions";
+}
+
+function parsePage(raw: string | string[] | undefined): number {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  const n = v ? Number.parseInt(v, 10) : 1;
+  return Number.isFinite(n) && n >= 1 ? n : 1;
+}
+
+export default async function AdminPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string; page?: string }>;
+}) {
+  const sp = await searchParams;
+  const tab = parseTab(sp.tab);
+  const page = parsePage(sp.page);
+  const offset = (page - 1) * PAGE_SIZE;
+
+  // Only fetch data for the active tab — keeps each render lean.
+  let pageData:
+    | { kind: "frictions"; data: { rows: PendingFrictionEntry[]; total: number } }
+    | { kind: "playbook"; data: { rows: PendingPlaybookEntry[]; total: number } }
+    | { kind: "runs"; data: { rows: PipelineRunGroup[]; total: number } }
+    | { kind: "moments"; data: { rows: AdminMomentEntry[]; total: number } };
+
+  if (tab === "frictions") {
+    pageData = { kind: "frictions", data: await getPendingFrictionsPage(offset, PAGE_SIZE) };
+  } else if (tab === "playbook") {
+    pageData = { kind: "playbook", data: await getPendingPlaybookPage(offset, PAGE_SIZE) };
+  } else if (tab === "runs") {
+    pageData = { kind: "runs", data: await getPipelineRunGroupsPage(offset, PAGE_SIZE) };
+  } else {
+    pageData = { kind: "moments", data: await getAllMomentsAdminPage(offset, PAGE_SIZE) };
+  }
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-12">
-      <header className="border-b border-neutral-200 pb-6 mb-10">
+      <header className="border-b border-neutral-200 pb-6 mb-8">
         <p className="text-sm uppercase tracking-widest text-neutral-500">Operator</p>
         <h1 className="mt-2 text-3xl font-semibold leading-tight">Admin dashboard</h1>
         <nav className="mt-4 flex items-baseline gap-3 flex-wrap text-sm text-neutral-500">
@@ -122,132 +193,145 @@ export default async function AdminPage() {
         </nav>
       </header>
 
-      <PipelineRunsSection groups={runGroups} />
-      <PendingReviewSection pending={pending} />
-      <PendingPlaybookSection pending={pendingPlaybook} />
-      <AllMomentsSection entries={moments} />
+      <TabNav active={tab} />
+
+      <section className="mt-8">
+        {pageData.kind === "frictions" && (
+          <FrictionsTab page={page} pageSize={PAGE_SIZE} total={pageData.data.total} rows={pageData.data.rows} />
+        )}
+        {pageData.kind === "playbook" && (
+          <PlaybookTab page={page} pageSize={PAGE_SIZE} total={pageData.data.total} rows={pageData.data.rows} />
+        )}
+        {pageData.kind === "runs" && (
+          <RunsTab page={page} pageSize={PAGE_SIZE} total={pageData.data.total} rows={pageData.data.rows} />
+        )}
+        {pageData.kind === "moments" && (
+          <MomentsTab page={page} pageSize={PAGE_SIZE} total={pageData.data.total} rows={pageData.data.rows} />
+        )}
+      </section>
     </main>
   );
 }
 
-async function triggerMatchingAction() {
-  "use server";
-  await triggerMatching();
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Tab nav + pagination shells
+// ─────────────────────────────────────────────────────────────────────────────
 
-function PipelineRunsSection({ groups }: { groups: PipelineRunGroup[] }) {
+function TabNav({ active }: { active: TabKey }) {
   return (
-    <section className="mb-16">
-      <div className="flex items-baseline justify-between gap-4 mb-2 flex-wrap">
-        <h2 className="text-xl font-semibold">Recent pipeline runs</h2>
-        <form action={triggerMatchingAction}>
-          <button
-            type="submit"
-            className="rounded bg-neutral-900 text-white text-xs font-medium px-3 py-1.5 hover:bg-neutral-700 transition-colors"
+    <nav role="tablist" className="flex flex-wrap gap-1 border-b border-neutral-200">
+      {TAB_ORDER.map((tab) => {
+        const isActive = tab === active;
+        return (
+          <Link
+            key={tab}
+            role="tab"
+            aria-selected={isActive}
+            href={{ pathname: "/admin", query: { tab } }}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              isActive
+                ? "border-neutral-900 text-neutral-900"
+                : "border-transparent text-neutral-500 hover:text-neutral-900"
+            }`}
           >
-            Run matcher now ↻
-          </button>
-        </form>
-      </div>
-      <p className="text-sm text-neutral-500 mb-6">
-        Grouped by cron tick (stages within 5 minutes treated as one run).
-        Newest first.{" "}
-        <span className="text-neutral-700">
-          Manual trigger fires the backfill matcher via GitHub Actions; check
-          back in 30–60 seconds for the new pipeline_runs row.
-        </span>
+            {TAB_LABEL[tab]}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
+function Pagination({
+  tab,
+  page,
+  pageSize,
+  total,
+}: {
+  tab: TabKey;
+  page: number;
+  pageSize: number;
+  total: number;
+}) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (totalPages <= 1) return null;
+  const prev = Math.max(1, page - 1);
+  const next = Math.min(totalPages, page + 1);
+  const from = (page - 1) * pageSize + 1;
+  const to = Math.min(page * pageSize, total);
+
+  return (
+    <div className="mt-8 flex items-center justify-between text-sm text-neutral-600 gap-3 flex-wrap">
+      <p>
+        Showing <span className="font-mono">{from}–{to}</span> of{" "}
+        <span className="font-mono">{total}</span>
       </p>
-      {groups.length === 0 ? (
-        <p className="text-neutral-700">No pipeline runs recorded yet.</p>
-      ) : (
-        <ol className="space-y-6">
-          {groups.map((group, i) => (
-            <RunGroup key={`${group.started_at}-${i}`} group={group} />
-          ))}
-        </ol>
-      )}
-    </section>
-  );
-}
-
-function RunGroup({ group }: { group: PipelineRunGroup }) {
-  return (
-    <li className="border border-neutral-200 rounded-lg overflow-hidden">
-      <div className="px-4 py-3 bg-neutral-50 border-b border-neutral-200 flex items-baseline gap-3 flex-wrap">
-        <StatusBadge status={group.overall_status} />
-        <span className="text-sm font-mono">{fmtTime(group.started_at)}</span>
-        <span className="text-xs text-neutral-500">
-          {group.stages.length} stage{group.stages.length === 1 ? "" : "s"}
-          {" · duration "}
-          {durationMs(group.started_at, group.finished_at)}
+      <div className="flex items-center gap-2">
+        {page > 1 ? (
+          <Link
+            href={{ pathname: "/admin", query: { tab, page: prev } }}
+            className="rounded border border-neutral-300 px-3 py-1 hover:bg-neutral-50"
+          >
+            ← Prev
+          </Link>
+        ) : (
+          <span className="rounded border border-neutral-200 px-3 py-1 text-neutral-300">← Prev</span>
+        )}
+        <span className="font-mono text-xs text-neutral-500">
+          page {page} / {totalPages}
         </span>
+        {page < totalPages ? (
+          <Link
+            href={{ pathname: "/admin", query: { tab, page: next } }}
+            className="rounded border border-neutral-300 px-3 py-1 hover:bg-neutral-50"
+          >
+            Next →
+          </Link>
+        ) : (
+          <span className="rounded border border-neutral-200 px-3 py-1 text-neutral-300">Next →</span>
+        )}
       </div>
-      <table className="w-full text-sm">
-        <thead className="text-xs text-neutral-500 uppercase tracking-wide">
-          <tr className="border-b border-neutral-200">
-            <th className="text-left px-4 py-2 font-medium">Stage</th>
-            <th className="text-left px-4 py-2 font-medium">Status</th>
-            <th className="text-left px-4 py-2 font-medium">Items</th>
-            <th className="text-left px-4 py-2 font-medium">Duration</th>
-            <th className="text-left px-4 py-2 font-medium">Error</th>
-          </tr>
-        </thead>
-        <tbody>
-          {group.stages.map((stage) => (
-            <StageRow key={stage.id} stage={stage} />
-          ))}
-        </tbody>
-      </table>
-    </li>
+    </div>
   );
 }
 
-function StageRow({ stage }: { stage: PipelineRunRow }) {
-  const items =
-    stage.items_processed === null
-      ? "—"
-      : `${stage.items_succeeded ?? 0}/${stage.items_processed}`;
-  return (
-    <tr className="border-b border-neutral-100 last:border-b-0">
-      <td className="px-4 py-2 font-mono text-xs">{stage.stage}</td>
-      <td className="px-4 py-2"><StatusBadge status={stage.status} /></td>
-      <td className="px-4 py-2 font-mono text-xs">{items}</td>
-      <td className="px-4 py-2 font-mono text-xs text-neutral-600">
-        {durationMs(stage.started_at, stage.finished_at)}
-      </td>
-      <td className="px-4 py-2 text-xs text-rose-700 max-w-md truncate">
-        {stage.error_message ?? ""}
-      </td>
-    </tr>
-  );
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Tab: Friction approvals
+// ─────────────────────────────────────────────────────────────────────────────
 
-function PendingReviewSection({ pending }: { pending: PendingFrictionEntry[] }) {
+function FrictionsTab({
+  page, pageSize, total, rows,
+}: {
+  page: number; pageSize: number; total: number; rows: PendingFrictionEntry[];
+}) {
   return (
-    <section className="mb-16">
-      <h2 className="text-xl font-semibold mb-1">Pending review queue</h2>
-      <p className="text-sm text-neutral-500 mb-6">
-        Frictions below the confidence threshold (self_rating &lt; 7). These wait
-        for Yangcho&apos;s approval before going public.
-        {" "}
-        <span className="text-neutral-700">{pending.length} item{pending.length === 1 ? "" : "s"} queued.</span>
-      </p>
-      {pending.length === 0 ? (
+    <>
+      <header className="mb-6">
+        <h2 className="text-xl font-semibold">Pending friction approvals</h2>
+        <p className="mt-1 text-sm text-neutral-500">
+          Frictions below the auto-publish threshold (self_rating &lt; 8) wait
+          for Yangcho&apos;s approval. Sorted by confidence descending —
+          highest-rated items are the closest to the threshold and the most
+          worth your attention.
+          {" "}
+          <span className="text-neutral-700">{total} item{total === 1 ? "" : "s"} in queue.</span>
+        </p>
+      </header>
+      {rows.length === 0 ? (
         <p className="text-neutral-700">Queue is empty.</p>
       ) : (
         <ul className="space-y-3">
-          {pending.map((entry) => (
-            <PendingRow key={entry.friction_id} entry={entry} />
+          {rows.map((entry) => (
+            <PendingFrictionRow key={entry.friction_id} entry={entry} />
           ))}
         </ul>
       )}
-    </section>
+      <Pagination tab="frictions" page={page} pageSize={pageSize} total={total} />
+    </>
   );
 }
 
-function PendingRow({ entry }: { entry: PendingFrictionEntry }) {
-  // Bind the friction_id into the form-action closures so each row's buttons
-  // hit the correct backend action.
+function PendingFrictionRow({ entry }: { entry: PendingFrictionEntry }) {
   async function approve() {
     "use server";
     await approveFriction(entry.friction_id);
@@ -265,7 +349,7 @@ function PendingRow({ entry }: { entry: PendingFrictionEntry }) {
             <span aria-hidden className="text-neutral-400 group-open:rotate-90 transition-transform inline-block">
               ▸
             </span>
-            <span className="font-mono">rating {entry.self_rating}/10</span>
+            <ConfidenceBadge rating={entry.self_rating} />
             {entry.efficacy_class && (
               <span>{entry.efficacy_class.replaceAll("-", " ")}</span>
             )}
@@ -318,38 +402,41 @@ function PendingRow({ entry }: { entry: PendingFrictionEntry }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Pending playbook queue — three flavors (marketing_post / product_idea /
-// influencer), each renders differently inside a shared <details> shell.
+// Tab: Playbook approvals
 // ─────────────────────────────────────────────────────────────────────────────
 
-function PendingPlaybookSection({ pending }: { pending: PendingPlaybookEntry[] }) {
+function PlaybookTab({
+  page, pageSize, total, rows,
+}: {
+  page: number; pageSize: number; total: number; rows: PendingPlaybookEntry[];
+}) {
   return (
-    <section className="mb-16">
-      <h2 className="text-xl font-semibold mb-1">Pending playbook queue</h2>
-      <p className="text-sm text-neutral-500 mb-6">
-        Marketing posts, new-product ideas, and influencer suggestions waiting
-        for editorial approval. Playbook items always queue regardless of the
-        AI&apos;s confidence — your eyes are the only line of defense for voice
-        and real-person recommendations.{" "}
-        <span className="text-neutral-700">
-          {pending.length} item{pending.length === 1 ? "" : "s"} queued.
-        </span>
-      </p>
-      {pending.length === 0 ? (
+    <>
+      <header className="mb-6">
+        <h2 className="text-xl font-semibold">Pending playbook approvals</h2>
+        <p className="mt-1 text-sm text-neutral-500">
+          Marketing posts, new-product ideas, and influencer suggestions waiting
+          for editorial approval. Playbook items always queue regardless of the
+          AI&apos;s confidence — your eyes are the only line of defense for
+          voice and real-person recommendations.{" "}
+          <span className="text-neutral-700">{total} item{total === 1 ? "" : "s"} in queue.</span>
+        </p>
+      </header>
+      {rows.length === 0 ? (
         <p className="text-neutral-700">Queue is empty.</p>
       ) : (
         <ul className="space-y-3">
-          {pending.map((entry) => (
+          {rows.map((entry) => (
             <PendingPlaybookRow key={entry.playbook_id} entry={entry} />
           ))}
         </ul>
       )}
-    </section>
+      <Pagination tab="playbook" page={page} pageSize={pageSize} total={total} />
+    </>
   );
 }
 
 function PendingPlaybookRow({ entry }: { entry: PendingPlaybookEntry }) {
-  // Per-row Server Action closures.
   async function approve() {
     "use server";
     await approvePlaybook(entry.playbook_id);
@@ -483,15 +570,112 @@ function Detail({ label, value }: { label: string; value: string }) {
   );
 }
 
-function AllMomentsSection({ entries }: { entries: AdminMomentEntry[] }) {
+// ─────────────────────────────────────────────────────────────────────────────
+// Tab: Pipeline runs
+// ─────────────────────────────────────────────────────────────────────────────
+
+function RunsTab({
+  page, pageSize, total, rows,
+}: {
+  page: number; pageSize: number; total: number; rows: PipelineRunGroup[];
+}) {
   return (
-    <section className="mb-8">
-      <h2 className="text-xl font-semibold mb-1">All moments</h2>
-      <p className="text-sm text-neutral-500 mb-6">
-        Every moment the pipeline has produced — published, pending, or empty.
-        Newest first. <span className="text-neutral-700">{entries.length} total.</span>
-      </p>
-      {entries.length === 0 ? (
+    <>
+      <header className="mb-6 flex items-baseline justify-between gap-4 flex-wrap">
+        <div>
+          <h2 className="text-xl font-semibold">Recent pipeline runs</h2>
+          <p className="mt-1 text-sm text-neutral-500">
+            Grouped by cron tick (stages within 5 minutes treated as one run).
+            Newest first.
+          </p>
+        </div>
+        <TriggerButton />
+      </header>
+      {rows.length === 0 ? (
+        <p className="text-neutral-700">No pipeline runs recorded yet.</p>
+      ) : (
+        <ol className="space-y-6">
+          {rows.map((group, i) => (
+            <RunGroupRow key={`${group.started_at}-${i}`} group={group} />
+          ))}
+        </ol>
+      )}
+      <Pagination tab="runs" page={page} pageSize={pageSize} total={total} />
+    </>
+  );
+}
+
+function RunGroupRow({ group }: { group: PipelineRunGroup }) {
+  return (
+    <li className="border border-neutral-200 rounded-lg overflow-hidden">
+      <div className="px-4 py-3 bg-neutral-50 border-b border-neutral-200 flex items-baseline gap-3 flex-wrap">
+        <StatusBadge status={group.overall_status} />
+        <span className="text-sm font-mono">{fmtTime(group.started_at)}</span>
+        <span className="text-xs text-neutral-500">
+          {group.stages.length} stage{group.stages.length === 1 ? "" : "s"}
+          {" · duration "}
+          {durationMs(group.started_at, group.finished_at)}
+        </span>
+      </div>
+      <table className="w-full text-sm">
+        <thead className="text-xs text-neutral-500 uppercase tracking-wide">
+          <tr className="border-b border-neutral-200">
+            <th className="text-left px-4 py-2 font-medium">Stage</th>
+            <th className="text-left px-4 py-2 font-medium">Status</th>
+            <th className="text-left px-4 py-2 font-medium">Items</th>
+            <th className="text-left px-4 py-2 font-medium">Duration</th>
+            <th className="text-left px-4 py-2 font-medium">Error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {group.stages.map((stage) => (
+            <StageRow key={stage.id} stage={stage} />
+          ))}
+        </tbody>
+      </table>
+    </li>
+  );
+}
+
+function StageRow({ stage }: { stage: PipelineRunRow }) {
+  const items =
+    stage.items_processed === null
+      ? "—"
+      : `${stage.items_succeeded ?? 0}/${stage.items_processed}`;
+  return (
+    <tr className="border-b border-neutral-100 last:border-b-0">
+      <td className="px-4 py-2 font-mono text-xs">{stage.stage}</td>
+      <td className="px-4 py-2"><StatusBadge status={stage.status} /></td>
+      <td className="px-4 py-2 font-mono text-xs">{items}</td>
+      <td className="px-4 py-2 font-mono text-xs text-neutral-600">
+        {durationMs(stage.started_at, stage.finished_at)}
+      </td>
+      <td className="px-4 py-2 text-xs text-rose-700 max-w-md truncate">
+        {stage.error_message ?? ""}
+      </td>
+    </tr>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tab: All moments
+// ─────────────────────────────────────────────────────────────────────────────
+
+function MomentsTab({
+  page, pageSize, total, rows,
+}: {
+  page: number; pageSize: number; total: number; rows: AdminMomentEntry[];
+}) {
+  return (
+    <>
+      <header className="mb-6">
+        <h2 className="text-xl font-semibold">All moments</h2>
+        <p className="mt-1 text-sm text-neutral-500">
+          Every moment the pipeline has produced — published, pending, or empty.
+          Newest first. <span className="text-neutral-700">{total} total.</span>
+        </p>
+      </header>
+      {rows.length === 0 ? (
         <p className="text-neutral-700">No moments recorded yet.</p>
       ) : (
         <table className="w-full text-sm border border-neutral-200 rounded-lg overflow-hidden">
@@ -507,13 +691,14 @@ function AllMomentsSection({ entries }: { entries: AdminMomentEntry[] }) {
             </tr>
           </thead>
           <tbody>
-            {entries.map((entry) => (
+            {rows.map((entry) => (
               <AdminMomentRow key={entry.moment.id} entry={entry} />
             ))}
           </tbody>
         </table>
       )}
-    </section>
+      <Pagination tab="moments" page={page} pageSize={pageSize} total={total} />
+    </>
   );
 }
 
