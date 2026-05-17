@@ -140,7 +140,7 @@ def test_iron_rule_3_parse_or_default_returns_none_on_garbage() -> None:
         text="this is not json at all just some text",
         prompt_name="friction",
         prompt_version="abc123",
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-4-7",
         input_tokens=100,
         output_tokens=20,
     )

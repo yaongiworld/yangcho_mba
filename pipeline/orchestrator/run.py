@@ -452,9 +452,17 @@ async def _persist_matches_for_friction(
                 best_match.product_id, exc,
             )
 
+    # Rate-limit backoff between sequential LLM calls. The Anthropic
+    # account's 30K tokens/min cap is the binding constraint when matcher
+    # + marketing + product_idea all fire back-to-back inside a single
+    # friction's persist cycle. 2 seconds is well under any human-noticeable
+    # latency and gives the per-minute budget room to recover.
+    LLM_INTER_CALL_BACKOFF_SECONDS = 2.0
+
     # Stage 2: marketing post — generate only when we have a usable match
     # to pitch against. Always queues for review (kind=marketing_post).
     if best_match is not None and best_match_product is not None:
+        await asyncio.sleep(LLM_INTER_CALL_BACKOFF_SECONDS)
         await _persist_marketing_post(
             client, friction_id, friction, best_match_product, best_match, version,
         )
@@ -463,6 +471,7 @@ async def _persist_matches_for_friction(
     # (or matches list is empty). Uses the best (failed) match as context.
     best_score = float(best_match.match_score) if best_match else None
     if should_generate_idea(best_score):
+        await asyncio.sleep(LLM_INTER_CALL_BACKOFF_SECONDS)
         await _persist_product_idea(
             client, friction_id, friction, best_match_product, best_match, version,
         )
@@ -686,6 +695,18 @@ async def run_daily(today: date_t | None = None) -> int:
     return 0
 
 
+# Pacing for backfill loops. Set high enough to stay under the Anthropic
+# org rate limit (30K input tokens / minute on the default tier as of
+# 2026-05-17). The matcher fires ~5K tokens per friction call; influencer
+# fires ~25K because web_search results inflate the prompt context.
+#
+# These pause AFTER each item in a backfill loop. Per-friction internal
+# pacing happens inside _persist_matches_for_friction via
+# LLM_INTER_CALL_BACKOFF_SECONDS.
+BACKFILL_INTER_ITEM_BACKOFF_SECONDS = 2.0
+BACKFILL_INFLUENCER_BACKOFF_SECONDS = 15.0
+
+
 async def stage_backfill_playbook() -> None:
     """Catch-up generator for approved content missing matches or playbook.
 
@@ -751,7 +772,7 @@ async def stage_backfill_playbook() -> None:
                     "backfill: pass 1 — %d approved friction(s) missing matches",
                     len(unmatched),
                 )
-                for row in unmatched:
+                for i, row in enumerate(unmatched):
                     friction = FrictionItem(
                         summary=row["friction_summary"],
                         mechanism=row["mechanism"],
@@ -764,6 +785,13 @@ async def stage_backfill_playbook() -> None:
                         client, row["id"], friction, version
                     )
                     total_succeeded += 1
+                    # Pause between frictions in the backfill to stay under
+                    # Anthropic's per-minute token budget. Each friction
+                    # iteration internally fires up to 3 LLM calls (matcher
+                    # + marketing + idea), so sprinting through many
+                    # frictions back-to-back is the rate-limit risk.
+                    if i < len(unmatched) - 1:
+                        await asyncio.sleep(BACKFILL_INTER_ITEM_BACKOFF_SECONDS)
                 total_processed += len(unmatched)
 
         # ── Pass 2: approved frictions with matches but missing per-friction playbook ──
@@ -815,7 +843,7 @@ async def stage_backfill_playbook() -> None:
                 )
                 from pipeline.schemas import ProductMatchItem
 
-                for row in need_playbook:
+                for i, row in enumerate(need_playbook):
                     # Hydrate the top match (rank 1).
                     top_match = (
                         client.table("matches")
@@ -867,6 +895,8 @@ async def stage_backfill_playbook() -> None:
                         )
 
                     total_succeeded += 1
+                    if i < len(need_playbook) - 1:
+                        await asyncio.sleep(BACKFILL_INTER_ITEM_BACKOFF_SECONDS)
                 total_processed += len(need_playbook)
 
         # ── Pass 3: moments with approved frictions but no influencer ──
@@ -917,7 +947,7 @@ async def stage_backfill_playbook() -> None:
                 # Lightweight namespace for the helper's expected shape.
                 from types import SimpleNamespace
 
-                for m_row in moment_rows:
+                for i, m_row in enumerate(moment_rows):
                     # Gather all approved frictions for this moment as context.
                     fric_rows = [f for f in approved if f["moment_id"] == m_row["id"]]
                     # Build a stub analysis-like object that has .frictions
@@ -941,6 +971,10 @@ async def stage_backfill_playbook() -> None:
                         client, m_row["id"], moment_stub, analysis_stub, version,
                     )
                     total_succeeded += 1
+                    # Influencer calls are the heaviest (web_search inflates
+                    # context by ~20K tokens). Longer backoff between them.
+                    if i < len(moment_rows) - 1:
+                        await asyncio.sleep(BACKFILL_INFLUENCER_BACKOFF_SECONDS)
                 total_processed += len(moment_rows)
 
         h.items_processed = total_processed

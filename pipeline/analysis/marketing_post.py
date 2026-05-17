@@ -15,7 +15,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
-from pipeline.llm import call_llm, parse_or_default
+from pipeline.llm import HAIKU_MODEL, call_llm, parse_or_default
 from pipeline.schemas import FrictionItem, MarketingPostBody, ProductMatchItem
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,12 @@ async def generate_marketing_post(
                 "scientific_argument": inp.match.scientific_argument,
             },
             max_tokens=MARKETING_POST_MAX_TOKENS,
+            # Marketing copy is creative-shaped, not chain-of-mechanism;
+            # Haiku produces strong outputs here at ~5x less cost and frees
+            # Sonnet rate-limit budget for the friction analyzer + matcher.
+            # The banned-phrase voice gate (in this module) is the safety
+            # net for any voice slips the cheaper model might make.
+            model=HAIKU_MODEL,
         )
     except Exception as exc:
         logger.warning("marketing_post: call_llm failed: %s", exc)

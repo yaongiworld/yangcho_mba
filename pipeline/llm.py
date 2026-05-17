@@ -34,10 +34,15 @@ logger = logging.getLogger(__name__)
 
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 
-# Default model: Sonnet for most calls (good reasoning at portfolio scale, cheap-ish).
-# Override via call_llm(model=...) for the moat friction prompt if a sharper model
-# materially helps quality.
-DEFAULT_MODEL = "claude-sonnet-4-6"
+# Model tiering — bumped to Sonnet 4.7 across the moat 2026-05-17.
+# Each call site can override via call_llm(model=...) when a different
+# tier fits the task. See HAIKU_MODEL below for the cheap-fast option.
+DEFAULT_MODEL = "claude-sonnet-4-7"
+# Haiku 4.5 for prompts that don't need deep mechanism reasoning:
+# marketing_post (creative copy, voice-gated), scoring (1-5 integers),
+# self_rating (1-10 integer). ~5x cheaper, ~3x faster, frees rate-limit
+# headroom for the Sonnet calls that actually need it.
+HAIKU_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_MAX_TOKENS = 2048
 DEFAULT_MAX_RETRIES = 3
 
