@@ -35,6 +35,9 @@ def _facts_to_row(facts: ProductFacts, *, platform: str = PLATFORM_OY_GLOBAL) ->
         "name": facts.name,
         "category": facts.category,
         "public_url": facts.public_url,
+        # OY CDN URL captured at scrape time. Persisted per migration 0009 so
+        # the image-download stage has a source to mirror into Supabase Storage.
+        "image_url": facts.image_url,
         "last_verified_at": datetime.now(timezone.utc).isoformat(),
         "last_scraped_at": datetime.now(timezone.utc).isoformat(),
         "is_dead_link": False,

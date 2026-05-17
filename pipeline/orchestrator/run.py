@@ -690,6 +690,13 @@ async def run_daily(today: date_t | None = None) -> int:
     # missing one. Catches Yangcho's manual approves via /admin between ticks.
     await stage_backfill_playbook()
 
+    # Stage 7 — download any product images we don't have yet. Cheap when
+    # nothing's missing; ~30 minutes for a fresh 107-product catalog at
+    # 2 req/sec. Wrapped in record_stage with swallow=True so a CDN hiccup
+    # doesn't fail the whole run.
+    from pipeline.ingestion.catalog_images import stage_download_catalog_images
+    await stage_download_catalog_images()
+
     last = last_successful_run_at()
     logger.info("=== LLC pipeline done. Last successful run: %s ===", last)
     return 0
