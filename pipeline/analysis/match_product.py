@@ -5,8 +5,16 @@ products in Supabase, calls call_llm("product_match", ...) once per friction
 and returns ranked matches.
 
 Catalog scope per call: products in the OY category most aligned with the
-friction's `efficacy_class`. Sending the full 107-product catalog every call
-would dilute the model's attention and burn ~10x more input tokens.
+friction's `efficacy_class`, split into two pools:
+  * LG pool — up to LG_LIMIT LG-owned products (the LG-primary thesis).
+  * Competitor pool — up to COMPETITOR_LIMIT non-LG K-Beauty products
+    (so the model can recommend a competitor with scientific integrity
+    when LG has no good fit).
+
+This keeps prompt size at ~35 products × ~80 tokens regardless of how
+big the catalog grows (e.g. 3887 OY Skincare products as of 2026-05-17).
+The full-catalog "send everything" path stops scaling around N≈200 — at
+3887 it would blow the context window.
 
 LG-primary policy is enforced inside the prompt itself, not in code: the
 candidate list flags which products are LG-owned and the prompt instructs
@@ -45,10 +53,14 @@ EFFICACY_TO_CATEGORIES: dict[str, list[str]] = {
     "anti-inflammatory": ["Skincare", "Face Masks"],
 }
 
-# How many candidate products to send. Larger list = better recall but more
-# tokens per call. 60 covers most efficacy classes with the current 107-product
-# catalog while keeping prompt size manageable.
-MAX_CANDIDATES_PER_CALL = 60
+# Two-pool candidate caps: LG-primary thesis with competitor fallback.
+# LG_LIMIT 25 covers nearly the full LG catalog (~107 LG products across all
+# categories; per-category counts are small). COMPETITOR_LIMIT 10 is enough
+# to give the LLM a fallback when LG has no good fit — competitor matches
+# are signal, not noise. Combined: ~35 products max per call, ~3K input
+# tokens. Stable regardless of total catalog size.
+LG_LIMIT = 25
+COMPETITOR_LIMIT = 10
 
 # Top N matches to keep per friction. The prompt is told to return up to 3.
 MATCHES_PER_FRICTION = 3
@@ -84,24 +96,34 @@ def _format_candidates(rows: list[dict[str, Any]]) -> str:
 async def _fetch_candidates(efficacy_class: str | None) -> list[dict[str, Any]]:
     """Read product rows from Supabase that match the friction's efficacy class.
 
-    Pulls (id, brand, is_lg, category, name). Caps at MAX_CANDIDATES_PER_CALL
-    to keep prompt size sane. Order: LG products first (so they fit in the
-    cap before competitors when the catalog grows).
+    Two-pool query: LG-owned (up to LG_LIMIT) + competitor (up to
+    COMPETITOR_LIMIT). Returned with LG products first so the prompt's LG
+    bias has the right anchor order. Pulls (id, brand, is_lg, category, name).
     """
     cats = _categories_for(efficacy_class)
     client = supabase_client()
-    # supabase-py's .in_() takes a list of values for a column.
-    res = (
+
+    lg_res = (
         client.table("products")
         .select("id, brand, is_lg, category, name")
         .in_("category", cats)
+        .eq("is_lg", True)
         .eq("is_dead_link", False)
-        .order("is_lg", desc=True)  # LG first
         .order("id")
-        .limit(MAX_CANDIDATES_PER_CALL)
+        .limit(LG_LIMIT)
         .execute()
     )
-    return res.data or []
+    comp_res = (
+        client.table("products")
+        .select("id, brand, is_lg, category, name")
+        .in_("category", cats)
+        .eq("is_lg", False)
+        .eq("is_dead_link", False)
+        .order("id")
+        .limit(COMPETITOR_LIMIT)
+        .execute()
+    )
+    return (lg_res.data or []) + (comp_res.data or [])
 
 
 async def match_one_friction(
