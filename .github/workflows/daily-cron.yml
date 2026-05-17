@@ -32,7 +32,6 @@ jobs:
     timeout-minutes: 30  # async fan-out should complete in ~2 min; 30 is generous
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       # GITHUB_SHA is auto-injected; pipeline.version reads it for prompt_version stamping.
@@ -54,7 +53,7 @@ jobs:
       - name: Verify required secrets are set
         run: |
           missing=()
-          for var in ANTHROPIC_API_KEY GEMINI_API_KEY SUPABASE_URL SUPABASE_SECRET_KEY; do
+          for var in ANTHROPIC_API_KEY SUPABASE_URL SUPABASE_SECRET_KEY; do
             if [ -z "${!var}" ]; then
               missing+=("$var")
             fi
