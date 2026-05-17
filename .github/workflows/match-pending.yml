@@ -1,0 +1,69 @@
+name: Match pending frictions
+
+# Fires on operator demand from the /admin "Run matcher now" button.
+# The button hits GitHub's actions/workflows/{id}/dispatches API; this
+# workflow's `workflow_dispatch` trigger picks it up and runs the
+# backfill stage of the pipeline.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Don't fan out concurrent runs of the matcher. If a previous run is
+  # still going, drop the new request rather than queueing.
+  group: match-pending
+  cancel-in-progress: false
+
+jobs:
+  run-backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify required secrets are set
+        run: |
+          missing=()
+          for var in ANTHROPIC_API_KEY SUPABASE_URL SUPABASE_SECRET_KEY; do
+            if [ -z "${!var}" ]; then
+              missing+=("$var")
+            fi
+          done
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::missing required secrets: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Run backfill matcher
+        run: uv run python -m pipeline.scripts.match_pending
+
+      - name: Upload log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: match-pending-log-${{ github.run_id }}
+          path: pipeline.log
+          if-no-files-found: ignore
+          retention-days: 14

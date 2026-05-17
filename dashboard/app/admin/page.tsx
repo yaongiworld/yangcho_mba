@@ -23,6 +23,7 @@ import Link from "next/link";
 
 import { approveFriction, rejectFriction } from "@/app/admin/actions";
 import { signoutAction } from "@/app/admin/login/actions";
+import { triggerMatching } from "@/app/admin/trigger";
 import {
   getRecentPipelineRunGroups,
   getPendingFrictions,
@@ -117,13 +118,32 @@ export default async function AdminPage() {
   );
 }
 
+async function triggerMatchingAction() {
+  "use server";
+  await triggerMatching();
+}
+
 function PipelineRunsSection({ groups }: { groups: PipelineRunGroup[] }) {
   return (
     <section className="mb-16">
-      <h2 className="text-xl font-semibold mb-4">Recent pipeline runs</h2>
+      <div className="flex items-baseline justify-between gap-4 mb-2 flex-wrap">
+        <h2 className="text-xl font-semibold">Recent pipeline runs</h2>
+        <form action={triggerMatchingAction}>
+          <button
+            type="submit"
+            className="rounded bg-neutral-900 text-white text-xs font-medium px-3 py-1.5 hover:bg-neutral-700 transition-colors"
+          >
+            Run matcher now ↻
+          </button>
+        </form>
+      </div>
       <p className="text-sm text-neutral-500 mb-6">
         Grouped by cron tick (stages within 5 minutes treated as one run).
-        Newest first.
+        Newest first.{" "}
+        <span className="text-neutral-700">
+          Manual trigger fires the backfill matcher via GitHub Actions; check
+          back in 30–60 seconds for the new pipeline_runs row.
+        </span>
       </p>
       {groups.length === 0 ? (
         <p className="text-neutral-700">No pipeline runs recorded yet.</p>

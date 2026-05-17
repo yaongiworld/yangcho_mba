@@ -65,6 +65,34 @@ Why two LLM providers: Claude handles reasoning (the moat), Gemini Flash 2.5 han
 
 See [`dashboard/README.md`](dashboard/README.md). Requires `npm install` + a Supabase project. Not done yet.
 
+Dashboard `.env.local` (separate from the pipeline `.env`):
+
+```bash
+# Supabase — publishable key only; secret key is intentionally kept out of
+# the dashboard env surface. See dashboard/lib/supabase.ts for why.
+NEXT_PUBLIC_SUPABASE_URL=https://<ref>.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+SUPABASE_PROJECT_ID=<ref>            # used only by `npm run db:types`
+
+# Admin auth — gates /admin behind a single-user username + password.
+ADMIN_USER=yangcho
+ADMIN_PASS=<your-pick>
+ADMIN_SESSION_SECRET=<32+ random chars, e.g. `openssl rand -hex 32`>
+
+# Manual matching trigger — /admin "Run matcher now" button.
+# Fires the match-pending.yml GitHub Actions workflow via workflow_dispatch.
+# All LLM work runs Python-side in GitHub Actions; the dashboard never
+# calls Anthropic directly. See dashboard/app/admin/trigger.ts for why.
+#
+# PAT scope: classic = `repo` + `workflow`;
+#            fine-grained = Actions:Write on this single repo.
+# Generate at https://github.com/settings/tokens
+GITHUB_TOKEN=ghp_...
+GITHUB_REPO_OWNER=yaongiworld
+GITHUB_REPO_NAME=yangcho_mba
+GITHUB_DEFAULT_BRANCH=main
+```
+
 ## Conventions
 
 - **Atomic conventional commits.** One logical change per commit.
