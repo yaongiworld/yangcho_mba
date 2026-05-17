@@ -20,7 +20,32 @@ from pipeline.schemas import (
 )
 
 
-SQL_MIGRATION = Path(__file__).parent.parent.parent / "supabase" / "migrations" / "0001_initial_schema.sql"
+MIGRATIONS_DIR = Path(__file__).parent.parent.parent / "supabase" / "migrations"
+
+
+def _sql_enum_values(sql_type: str) -> list[str]:
+    """Reconstruct the live ENUM value set by walking every migration in order.
+
+    Picks up the initial `CREATE TYPE ... AS ENUM (...)` plus any later
+    `ALTER TYPE ... ADD VALUE 'x'` statements. This is what `\dT+` would
+    show in a fresh DB after all migrations apply — the only source of
+    truth we have without running Postgres in tests.
+    """
+    values: list[str] = []
+    create_re = re.compile(rf"CREATE TYPE {sql_type} AS ENUM \(([^)]+)\)")
+    add_re = re.compile(
+        rf"ALTER TYPE {sql_type} ADD VALUE(?: IF NOT EXISTS)? '([^']+)'"
+    )
+    for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
+        sql = path.read_text(encoding="utf-8")
+        m = create_re.search(sql)
+        if m:
+            values.extend(re.findall(r"'([^']+)'", m.group(1)))
+        for add_m in add_re.finditer(sql):
+            v = add_m.group(1)
+            if v not in values:
+                values.append(v)
+    return values
 
 
 @pytest.mark.parametrize(
@@ -34,13 +59,14 @@ SQL_MIGRATION = Path(__file__).parent.parent.parent / "supabase" / "migrations" 
     ],
 )
 def test_enum_parity_with_sql(py_enum, sql_type: str) -> None:
-    """Every Python enum must match the corresponding Postgres ENUM."""
-    sql = SQL_MIGRATION.read_text(encoding="utf-8")
-    m = re.search(rf"CREATE TYPE {sql_type} AS ENUM \(([^)]+)\)", sql)
-    assert m, f"could not find CREATE TYPE {sql_type} in migration"
-    sql_values = sorted(re.findall(r"'([^']+)'", m.group(1)))
+    """Every Python enum must match the corresponding Postgres ENUM, including
+    values added via later ALTER TYPE ADD VALUE migrations."""
+    sql_values = sorted(_sql_enum_values(sql_type))
+    assert sql_values, f"could not find any values for {sql_type} across migrations"
     py_values = sorted(member.value for member in py_enum)
-    assert py_values == sql_values, f"{py_enum.__name__} != {sql_type}: py={py_values} sql={sql_values}"
+    assert py_values == sql_values, (
+        f"{py_enum.__name__} != {sql_type}: py={py_values} sql={sql_values}"
+    )
 
 
 def test_friction_analysis_roundtrip() -> None:

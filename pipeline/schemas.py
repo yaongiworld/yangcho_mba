@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field, field_validator
 class PipelineStage(str, Enum):
     INGEST_CALENDAR = "ingest_calendar"
     INGEST_TIKTOK = "ingest_tiktok"
+    INGEST_GOOGLE_TRENDS = "ingest_google_trends"
     EXTRACT_MOMENTS = "extract_moments"
     SCORE_MOMENTS = "score_moments"
     ANALYZE_FRICTION = "analyze_friction"
@@ -45,6 +46,7 @@ class PipelineStatus(str, Enum):
 class SourceKind(str, Enum):
     TIKTOK = "tiktok"
     CALENDAR = "calendar"
+    GOOGLE_TRENDS = "google_trends"
 
 
 class ReviewStatus(str, Enum):

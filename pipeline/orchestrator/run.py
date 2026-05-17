@@ -77,6 +77,7 @@ from pipeline.analysis.product_idea import (
 )
 from pipeline.db import supabase_client
 from pipeline.ingestion.calendar import moments_for as calendar_moments_for
+from pipeline.ingestion.google_trends import fetch_google_trends_signals
 from pipeline.ingestion.tiktok import fetch_tiktok_signals
 from pipeline.observability import last_successful_run_at, record_stage
 from pipeline.schemas import (
@@ -118,6 +119,17 @@ async def stage_ingest_tiktok() -> list[RawSignal]:
         h.items_succeeded = len(signals)
         return signals
     return []  # only reached when swallow=True consumed an exception
+
+
+async def stage_ingest_google_trends() -> list[RawSignal]:
+    """Google Trends daily RSS. Quick HTTP fetch; swallow=True for symmetry
+    with the other ingest stages (a CDN hiccup shouldn't fail the day)."""
+    with record_stage(PipelineStage.INGEST_GOOGLE_TRENDS, swallow=True) as h:
+        signals = await fetch_google_trends_signals()
+        h.items_processed = len(signals)
+        h.items_succeeded = len(signals)
+        return signals
+    return []
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -199,18 +211,49 @@ def _moments_from_tiktok_hashtags(signals: list[RawSignal]) -> list[ExtractedMom
     return moments
 
 
+def _moments_from_google_trends(signals: list[RawSignal]) -> list[ExtractedMoment]:
+    """Each Google Trends entry becomes its own moment. Uses the search
+    title as the moment name, and includes the first news headline (when
+    available) so the friction analyzer has context beyond the bare query."""
+    moments: list[ExtractedMoment] = []
+    for sig in signals:
+        if sig.source != SourceKind.GOOGLE_TRENDS:
+            continue
+        title = sig.metadata.get("title") or sig.text
+        news = sig.metadata.get("news_titles") or []
+        description = (
+            f"Trending US search — {news[0]}"
+            if news else f"Trending US search: {title}"
+        )
+        moments.append(
+            ExtractedMoment(
+                name=str(title),
+                description=description,
+                source=SourceKind.GOOGLE_TRENDS,
+                signals=[sig],
+            )
+        )
+    return moments
+
+
 def stage_extract_moments(
     cal_moments: list[CalendarMoment],
-    tiktok_signals: list[RawSignal],
+    raw_signals: list[RawSignal],
 ) -> list[ExtractedMoment]:
-    """Group raw inputs into moments. v1 grouping; LLM clustering replaces this in W3+."""
+    """Group raw inputs into moments. v1 grouping; LLM clustering replaces this in W3+.
+
+    `raw_signals` is the union of every non-calendar source (TikTok, Google
+    Trends, future additions). Calendar moments are passed separately because
+    they have richer typed metadata (keywords, friction_hints) that drives
+    the keyword-overlap attachment.
+    """
     with record_stage(PipelineStage.EXTRACT_MOMENTS) as h:
-        # v1: TikTok signals attach to calendar moments by keyword overlap when
-        # the hashtag mentions a known cultural moment. TikTok hashtags that
-        # don't match a calendar entry surface as their own standalone moments.
-        moments, _leftover = _attach_signals_to_calendar(cal_moments, tiktok_signals)
-        # Add the leftover TikTok hashtags as standalone moments.
+        # v1: any signal whose text mentions a calendar entry's keywords gets
+        # attached to that moment. Leftover signals (no calendar match) get
+        # one-moment-per-signal treatment via the per-source helpers.
+        moments, _leftover = _attach_signals_to_calendar(cal_moments, raw_signals)
         moments.extend(_moments_from_tiktok_hashtags(_leftover))
+        moments.extend(_moments_from_google_trends(_leftover))
 
         h.items_processed = len(moments)
         h.items_succeeded = len(moments)
@@ -664,22 +707,29 @@ async def run_daily(today: date_t | None = None) -> int:
     today = today or date_t.today()
     logger.info("=== LLC pipeline start: %s (code_version=%s) ===", today, prompt_version())
 
-    # Stage 1 — ingest.
+    # Stage 1 — ingest. Three sources run in parallel:
+    #   * Calendar (deterministic, always-on)
+    #   * TikTok (most volume but flaky; /discover endpoint + Creative Center
+    #     fallback inside fetch_tiktok_signals)
+    #   * Google Trends (broad US lifestyle signal, stable RSS)
     cal_moments = stage_ingest_calendar()
-    tiktok_signals = await stage_ingest_tiktok()
+    tiktok_signals, gtrends_signals = await asyncio.gather(
+        stage_ingest_tiktok(),
+        stage_ingest_google_trends(),
+    )
+    raw_signals = list(tiktok_signals) + list(gtrends_signals)
     logger.info(
-        "ingest: %d calendar moments, %d tiktok signals",
-        len(cal_moments), len(tiktok_signals),
+        "ingest: %d calendar moments, %d tiktok signals, %d google_trends signals",
+        len(cal_moments), len(tiktok_signals), len(gtrends_signals),
     )
 
-    # Hard floor: if both sources returned empty, there's nothing to do today.
-    # Calendar should never be empty in practice unless the YAML is broken.
-    if not cal_moments and not tiktok_signals:
+    # Hard floor: if every source returned empty, there's nothing to do today.
+    if not cal_moments and not raw_signals:
         logger.warning("ingest: all sources empty; nothing to publish today")
         return 0
 
     # Stages 2–4.
-    moments = stage_extract_moments(cal_moments, tiktok_signals)
+    moments = stage_extract_moments(cal_moments, raw_signals)
     moments = stage_score_moments(moments)
     results = await stage_analyze_friction(moments)
 
