@@ -30,6 +30,14 @@ def storage_path_for(external_id: str, ext: str = "jpg") -> str:
     return f"{external_id}.{ext}"
 
 
+_CONTENT_TYPE_TO_EXT = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+}
+
+
 def upload_image(external_id: str, image_bytes: bytes, content_type: str = "image/jpeg") -> str | None:
     """Upload an image to the product-images bucket. Returns the bucket-
     relative path on success, None on failure.
@@ -37,7 +45,8 @@ def upload_image(external_id: str, image_bytes: bytes, content_type: str = "imag
     Idempotent in spirit — uses upsert=True so a re-upload for the same
     external_id replaces the existing file. Safe to call repeatedly.
     """
-    path = storage_path_for(external_id)
+    ext = _CONTENT_TYPE_TO_EXT.get(content_type, "jpg")
+    path = storage_path_for(external_id, ext=ext)
     try:
         client = supabase_client()
         client.storage.from_(BUCKET).upload(

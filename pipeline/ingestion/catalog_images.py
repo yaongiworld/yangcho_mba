@@ -47,6 +47,26 @@ class ImageDownloadResult:
     failed: int
 
 
+def _sniff_content_type(image_bytes: bytes) -> str | None:
+    """Detect MIME type from the first bytes of a file. Returns None when
+    the magic number isn't a recognized web-friendly image format.
+
+    OY's CDN sometimes returns content-type: application/octet-stream for
+    files that are valid JPEGs/PNGs/WebPs. Supabase Storage's bucket-level
+    MIME whitelist rejects octet-stream, so we re-derive the real type from
+    the bytes themselves. Cheaper + more correct than trusting the header.
+    """
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if image_bytes.startswith(b"RIFF") and image_bytes[8:12] == b"WEBP":
+        return "image/webp"
+    if image_bytes.startswith(b"GIF87a") or image_bytes.startswith(b"GIF89a"):
+        return "image/gif"
+    return None
+
+
 async def _download_one(
     client: httpx.AsyncClient,
     external_id: str,
@@ -64,9 +84,16 @@ async def _download_one(
         )
         return None
 
-    # OY serves all product images as image/jpeg — but trust the response
-    # header in case they ever serve png/webp.
-    content_type = r.headers.get("content-type", "image/jpeg").split(";")[0].strip()
+    # Sniff the actual type from the bytes — OY occasionally returns
+    # application/octet-stream in the response header, which Supabase
+    # rejects. The bytes still match a real image format.
+    content_type = _sniff_content_type(r.content)
+    if content_type is None:
+        logger.warning(
+            "catalog_images: %s downloaded but bytes are not a known image format (size=%d, header=%r)",
+            external_id, len(r.content), r.headers.get("content-type"),
+        )
+        return None
     return upload_image(external_id, r.content, content_type=content_type)
 
 
@@ -82,17 +109,37 @@ async def download_missing_images(*, limit: int | None = None) -> ImageDownloadR
         logger.warning("catalog_images: cannot reach Supabase: %s", exc)
         return ImageDownloadResult(0, 0, 0)
 
-    query = (
-        db.table("products")
-        .select("id, external_id, image_url")
-        .is_("image_path", "null")
-        .neq("image_url", None)
-        .eq("is_dead_link", False)
-        .order("id")
-    )
-    if limit is not None:
-        query = query.limit(limit)
-    rows = query.execute().data or []
+    # PostgREST returns at most 1000 rows per request by default. For a
+    # catalog of ~3900 products this would silently leave ~75% un-mirrored
+    # on the first run. Paginate via a range() loop until we get a short
+    # page or hit the caller's `limit`.
+    PAGE_SIZE = 1000
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        page_size = PAGE_SIZE
+        if limit is not None:
+            remaining = limit - len(rows)
+            if remaining <= 0:
+                break
+            page_size = min(PAGE_SIZE, remaining)
+
+        page = (
+            db.table("products")
+            .select("id, external_id, image_url")
+            .is_("image_path", "null")
+            .neq("image_url", None)
+            .eq("is_dead_link", False)
+            .order("id")
+            .range(offset, offset + page_size - 1)
+            .execute()
+            .data
+            or []
+        )
+        rows.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
 
     if not rows:
         return ImageDownloadResult(0, 0, 0)
