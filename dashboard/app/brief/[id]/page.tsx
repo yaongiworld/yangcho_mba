@@ -14,7 +14,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { getBriefByMomentId } from "@/lib/queries";
+import { getBriefByMomentId, momentSourceLabel } from "@/lib/queries";
 import type {
   FrictionWithMatches,
   InfluencerOutputBody,
@@ -56,7 +56,7 @@ export default async function BriefDetailPage({
           ← Back to today&apos;s brief
         </Link>
         <p className="mt-6 text-xs uppercase tracking-wide text-neutral-500">
-          {formatMomentDate(moment.moment_date)} · {moment.source === "tiktok" ? "TikTok trend" : "Cultural moment"}
+          {formatMomentDate(moment.moment_date)} · {momentSourceLabel(moment.source)}
         </p>
         <h1 className="mt-2 text-4xl font-semibold leading-tight">{moment.name}</h1>
         {moment.description && (

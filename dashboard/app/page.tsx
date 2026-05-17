@@ -21,7 +21,7 @@
 import Image from "next/image";
 import Link from "next/link";
 
-import { getDashboardCards } from "@/lib/queries";
+import { getDashboardCards, momentSourceLabel } from "@/lib/queries";
 import type {
   DashboardCard,
   InfluencerSuggestionEntry,
@@ -139,7 +139,7 @@ function MomentCard({ card }: { card: DashboardCard }) {
 }
 
 function MomentHeader({ moment }: { moment: PublicMoment }) {
-  const sourceLabel = moment.source === "tiktok" ? "TikTok trend" : "Cultural moment";
+  const sourceLabel = momentSourceLabel(moment.source);
   return (
     <header className="px-5 pt-5 pb-4">
       <div className="flex items-center justify-between gap-3 text-xs uppercase tracking-wide text-neutral-500 mb-2">

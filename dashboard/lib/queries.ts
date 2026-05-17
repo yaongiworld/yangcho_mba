@@ -14,10 +14,22 @@
 
 import { createServerClient } from "@/lib/supabase";
 
+export type MomentSource = "tiktok" | "calendar" | "google_trends";
+
+/** Human-readable label for a moment's source platform. Used in source-
+ *  provenance badges on the home page, /brief/[id], and /trends. */
+export function momentSourceLabel(source: MomentSource): string {
+  switch (source) {
+    case "tiktok": return "TikTok trend";
+    case "google_trends": return "Google Trends";
+    case "calendar": return "Cultural moment";
+  }
+}
+
 export interface PublicMoment {
   id: number;
   name: string;
-  source: "tiktok" | "calendar";
+  source: MomentSource;
   description: string | null;
   trend_velocity: number | null;
   score: number | null;

@@ -11,7 +11,7 @@
 
 import Link from "next/link";
 
-import { getAllApprovedMoments } from "@/lib/queries";
+import { getAllApprovedMoments, momentSourceLabel } from "@/lib/queries";
 import type { ArchiveEntry } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
@@ -106,7 +106,7 @@ function ArchiveRow({ entry }: { entry: ArchiveEntry }) {
       >
         <div className="flex items-baseline gap-3 flex-wrap">
           <span className="text-xs uppercase tracking-wide text-neutral-500">
-            {moment.source === "tiktok" ? "TikTok trend" : "Cultural moment"}
+            {momentSourceLabel(moment.source)}
           </span>
           <span className="ml-auto text-xs text-neutral-500">
             {friction_count} friction{friction_count === 1 ? "" : "s"}
