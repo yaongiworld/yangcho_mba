@@ -73,8 +73,12 @@ async def analyze_friction(
     """
     h1, h2, h3 = _hero_cases()
 
-    # The Anthropic SDK's sync client is what call_llm uses. Drop it on a
-    # thread so we can asyncio.gather a batch of these from the orchestrator.
+    # The Gemini SDK call inside call_llm is sync — drop it on a thread so
+    # we can asyncio.gather a batch of these from the orchestrator.
+    # thinking=True: friction analysis is the moat call. Gemini 2.5 Flash's
+    # thinking mode produces noticeably better mechanism reasoning here vs
+    # thinking-off, and at portfolio-scale volume (≤10 moments/day after
+    # dedup) the extra thinking tokens are still well under budget.
     try:
         result = await asyncio.to_thread(
             call_llm,
@@ -88,6 +92,7 @@ async def analyze_friction(
                 "signal_sample": _format_signal_sample(signals),
             },
             max_tokens=FRICTION_MAX_TOKENS,
+            thinking=True,
         )
     except Exception as exc:
         # Network failure, auth error, anything that escapes the SDK's max_retries.

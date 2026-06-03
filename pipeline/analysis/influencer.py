@@ -1,14 +1,19 @@
 """Influencer matcher — W4 third leg of the playbook.
 
-For each approved moment, calls Anthropic with the web_search tool enabled
-to find 1–3 US-based content creators on TikTok or Instagram whose public
-content centers on the moment.
+For each approved moment, calls Gemini with the GoogleSearch grounding tool
+enabled to find 1–3 US-based content creators on TikTok or Instagram whose
+public content centers on the moment.
 
 Per the /office-hours design doc, influencer suggestions ALWAYS queue for
 review regardless of confidence — real-people recommendations for brand
 pitches carry ethical surface no AI confidence number can absolve.
 Yangcho's eyes are the safeguard; see the validation block below for why
 no HTTP-based validator stands in between.
+
+Historical note: the web-search call used Anthropic's web_search_20250305
+tool until 2026-06-03. The migration to Gemini swapped that for the native
+GoogleSearch grounding tool. Output shape (InfluencerOutput JSON) is
+unchanged, so downstream parsing and the review queue are identical.
 """
 
 from __future__ import annotations
@@ -112,44 +117,47 @@ def _interpolate_influencer_prompt(inp: InfluencerInput) -> str:
 
 
 def _call_llm_with_web_search(prompt: str, max_tokens: int) -> LlmResult:
-    """Like pipeline.llm.call_llm, but with web_search tool enabled.
+    """Like pipeline.llm.call_llm, but with GoogleSearch grounding enabled.
 
-    Kept inline rather than added to call_llm() because web_search is only
+    Kept inline rather than added to call_llm() because GoogleSearch is only
     used here and has different cost/latency characteristics worth surfacing
     at the call site.
     """
-    from anthropic import Anthropic
+    import os
 
-    from pipeline.llm import DEFAULT_MAX_RETRIES, DEFAULT_MODEL
+    from google import genai
+    from google.genai import types
 
-    client = Anthropic(max_retries=DEFAULT_MAX_RETRIES)
-    response = client.messages.create(
+    from pipeline.llm import DEFAULT_MODEL
+
+    api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "GOOGLE_API_KEY (or GEMINI_API_KEY) not set in environment"
+        )
+
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
         model=DEFAULT_MODEL,
-        max_tokens=max_tokens,
-        tools=[
-            {
-                "type": "web_search_20250305",
-                "name": "web_search",
-                "max_uses": 5,
-            }
-        ],
-        messages=[{"role": "user", "content": prompt}],
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            max_output_tokens=max_tokens,
+            tools=[types.Tool(google_search=types.GoogleSearch())],
+        ),
     )
 
-    # Concatenate every text block in the response. The web_search tool
-    # produces tool_use + tool_result blocks interleaved with text; we only
-    # care about the final JSON-bearing text content.
-    text = "".join(
-        block.text for block in response.content if block.type == "text"
-    )
+    text = response.text or ""
+    usage = getattr(response, "usage_metadata", None)
+    input_tokens = getattr(usage, "prompt_token_count", 0) or 0
+    output_tokens = getattr(usage, "candidates_token_count", 0) or 0
 
     return LlmResult(
         text=text,
         prompt_name="influencer",
         prompt_version=prompt_version(),
         model=DEFAULT_MODEL,
-        input_tokens=response.usage.input_tokens,
-        output_tokens=response.usage.output_tokens,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
     )
 
 
