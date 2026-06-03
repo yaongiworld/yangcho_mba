@@ -76,6 +76,7 @@ from pipeline.analysis.product_idea import (
     should_generate_idea,
 )
 from pipeline.db import supabase_client
+from pipeline.dedup import ReusableFriction, find_reusable_frictions
 from pipeline.ingestion.calendar import moments_for as calendar_moments_for
 from pipeline.ingestion.google_trends import fetch_google_trends_signals
 from pipeline.ingestion.tiktok import fetch_tiktok_signals
@@ -326,29 +327,74 @@ def _select_top_by_source_quota(
 
 async def stage_analyze_friction(
     moments: list[ExtractedMoment],
-) -> list[tuple[ExtractedMoment, FrictionAnalysis | None]]:
+    today: date_t | None = None,
+) -> list[tuple[ExtractedMoment, FrictionAnalysis | None, list[ReusableFriction] | None]]:
     """Run the friction prompt across the top N moments in parallel.
 
     Selection uses per-source quotas (see SOURCE_QUOTAS above) so the daily
     brief always reflects multi-source coverage rather than letting one
     high-volume source dominate.
 
-    None entries in the returned list mean that moment's LLM call failed —
-    they're tracked in items_succeeded so pipeline_runs reflects partial.
+    Before invoking the LLM, each moment is checked against the cross-day
+    reuse cache (see pipeline.dedup). Moments whose normalized name appeared
+    in the last 14 days inherit those frictions verbatim — no LLM call.
+    This is the token-leak fix for fixed-calendar events (Met Gala, EDC,
+    Kentucky Derby) that were burning ~$X/day getting re-analyzed.
+
+    Returned tuple per moment is (moment, fresh_analysis, reused_frictions):
+      * fresh_analysis is non-None when the LLM ran successfully.
+      * reused_frictions is non-None when we copied a prior analysis.
+      * Both None means the LLM ran and failed.
+    The two are mutually exclusive — we never both call the LLM and reuse.
     """
+    today = today or date_t.today()
     with record_stage(PipelineStage.ANALYZE_FRICTION) as h:
         targets = _select_top_by_source_quota(moments)
         h.items_processed = len(targets)
 
+        # Reuse-by-name lookup. One Supabase round trip per moment is cheap
+        # vs the LLM call we're avoiding. Failures here fall through to the
+        # LLM path — dedup is an optimization, not a correctness gate.
+        try:
+            client = supabase_client()
+        except Exception as exc:
+            logger.warning("analyze_friction: supabase unreachable, skipping reuse: %s", exc)
+            client = None
+
+        reused: list[list[ReusableFriction] | None] = []
+        llm_targets: list[tuple[int, ExtractedMoment]] = []
+        for idx, m in enumerate(targets):
+            hit = find_reusable_frictions(client, m.name, today) if client else None
+            reused.append(hit)
+            if hit is None:
+                llm_targets.append((idx, m))
+
+        if reused and any(r is not None for r in reused):
+            reuse_count = sum(1 for r in reused if r is not None)
+            logger.info(
+                "analyze_friction: reused %d/%d moment(s) from prior analyses (~%d LLM call(s) saved)",
+                reuse_count, len(targets), reuse_count,
+            )
+
+        # Only fire the LLM for moments without a cache hit.
         tasks = [
             analyze_friction(m.name, m.description, m.signals)
-            for m in targets
+            for _, m in llm_targets
         ]
-        analyses = await asyncio.gather(*tasks, return_exceptions=False)
+        analyses_raw = await asyncio.gather(*tasks, return_exceptions=False)
         # analyze_friction never raises (returns None on failure).
 
-        h.items_succeeded = sum(1 for a in analyses if a is not None)
-        return list(zip(targets, analyses))
+        # Reassemble back into target order: reused first, LLM result otherwise.
+        analyses: list[FrictionAnalysis | None] = [None] * len(targets)
+        for (idx, _m), result in zip(llm_targets, analyses_raw, strict=True):
+            analyses[idx] = result
+
+        succeeded = sum(
+            1 for a, r in zip(analyses, reused, strict=True)
+            if a is not None or r is not None
+        )
+        h.items_succeeded = succeeded
+        return list(zip(targets, analyses, reused, strict=True))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -358,7 +404,9 @@ async def stage_analyze_friction(
 
 async def stage_persist(
     today: date_t,
-    results: list[tuple[ExtractedMoment, FrictionAnalysis | None]],
+    results: list[
+        tuple[ExtractedMoment, FrictionAnalysis | None, list[ReusableFriction] | None]
+    ],
 ) -> None:
     """Write moments + frictions + product matches to Supabase.
 
@@ -366,6 +414,8 @@ async def stage_persist(
       1. Insert the moment row.
       2. For each friction: insert friction row, set review_status from the
          confidence gate (self_rating >= 8 = 'approved', else 'pending').
+         When dedup returned a reused set (third tuple element), copy those
+         rows verbatim instead of writing the fresh analysis.
       3. ONLY for approved frictions: run product matching, insert top-3
          matches into the matches table.
 
@@ -387,7 +437,7 @@ async def stage_persist(
         version = prompt_version()
         succeeded = 0
 
-        for moment, analysis in results:
+        for moment, analysis, reused in results:
             try:
                 # Upsert moment row on (moment_date, name). Migration 0004 added
                 # the unique constraint so this is idempotent: re-runs replace
@@ -419,10 +469,47 @@ async def stage_persist(
                 # the schema takes care of the orphaned matches.
                 client.table("frictions").delete().eq("moment_id", moment_id).execute()
 
-                # If friction analysis succeeded, insert one row per friction.
-                # Confidence gate: self_rating ≥ 7 → review_status='approved' (auto-publish).
-                # Below threshold → review_status='pending' (queues for Yangcho).
-                if analysis is not None:
+                # Path A: reused frictions — copy from prior moment verbatim.
+                # Skip the friction LLM cost and ride the prior analysis's
+                # review_status (so an already-approved friction stays approved
+                # and immediately drives matcher/playbook; a pending one stays
+                # in the queue). Matches + playbook still regenerate via the
+                # backfill stage so catalog updates take effect.
+                reused_max_rating = 0
+                if reused is not None:
+                    for rf in reused:
+                        friction_resp = client.table("frictions").insert({
+                            "moment_id": moment_id,
+                            "friction_summary": rf.summary,
+                            "mechanism": rf.mechanism,
+                            "efficacy_class": rf.efficacy_class,
+                            "self_rating": rf.self_rating,
+                            "review_status": rf.review_status,
+                            "prompt_version": f"reused:{rf.source_prompt_version}",
+                        }).execute()
+                        if not friction_resp.data:
+                            continue
+                        friction_id = friction_resp.data[0]["id"]
+                        reused_max_rating = max(reused_max_rating, rf.self_rating)
+
+                        if rf.review_status == "approved":
+                            # Rebuild a FrictionItem so matcher has the shape it expects.
+                            from pipeline.schemas import FrictionItem
+                            await _persist_matches_for_friction(
+                                client,
+                                friction_id,
+                                FrictionItem(
+                                    summary=rf.summary,
+                                    mechanism=rf.mechanism,
+                                    efficacy_class=rf.efficacy_class,
+                                ),
+                                version,
+                            )
+
+                # Path B: fresh LLM analysis — insert as before.
+                # Confidence gate: self_rating ≥ 7 → 'approved' (auto-publish),
+                # else 'pending' (queues for Yangcho).
+                elif analysis is not None:
                     review_status = "approved" if analysis.self_rating >= 7 else "pending"
                     for f in analysis.frictions:
                         friction_resp = client.table("frictions").insert({
@@ -446,10 +533,35 @@ async def stage_persist(
 
                 # Per-moment playbook: influencer suggestions. Once per
                 # moment (not per friction — same moment, same audience).
-                # Only fires when the moment has at least one approved friction.
-                if analysis is not None and analysis.self_rating >= 7:
+                # Fires when the moment has at least one approved friction,
+                # for both fresh (self_rating ≥ 7) and reused (any reused
+                # friction with review_status='approved') paths.
+                has_approved = (
+                    (analysis is not None and analysis.self_rating >= 7)
+                    or (reused is not None and any(rf.review_status == "approved" for rf in reused))
+                )
+                if has_approved:
+                    # Influencer needs a FrictionAnalysis-shaped object to
+                    # gather friction context. When reusing, synthesize one
+                    # from the reused list — same shape, no LLM round-trip.
+                    if analysis is not None:
+                        ctx_analysis = analysis
+                    else:
+                        from pipeline.schemas import FrictionAnalysis, FrictionItem
+                        ctx_analysis = FrictionAnalysis(
+                            frictions=[
+                                FrictionItem(
+                                    summary=rf.summary,
+                                    mechanism=rf.mechanism,
+                                    efficacy_class=rf.efficacy_class,
+                                )
+                                for rf in (reused or [])
+                            ],
+                            self_rating=reused_max_rating or 7,
+                            self_rating_reasoning="reused from prior moment",
+                        )
                     await _persist_influencer_for_moment(
-                        client, moment_id, moment, analysis, version,
+                        client, moment_id, moment, ctx_analysis, version,
                     )
 
                 succeeded += 1
@@ -765,7 +877,7 @@ async def run_daily(today: date_t | None = None) -> int:
     # Stages 2–4.
     moments = stage_extract_moments(cal_moments, raw_signals)
     moments = stage_score_moments(moments)
-    results = await stage_analyze_friction(moments)
+    results = await stage_analyze_friction(moments, today=today)
 
     # Stage 5 — persist.
     await stage_persist(today, results)
