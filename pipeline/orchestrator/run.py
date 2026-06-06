@@ -290,39 +290,38 @@ def stage_score_moments(moments: list[ExtractedMoment]) -> list[ExtractedMoment]
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-# Per-source quotas — picks N moments per source from the top of the
-# score-sorted list. With three sources of unequal volume (calendar ~8
-# moments/day, TikTok 10-20, Google Trends 10), a pure score-sort would
-# let calendar's confidence bonus crowd out the other sources. Quotas
-# guarantee multi-source diversity on the daily dashboard. The total
-# (10) caps daily LLM friction-analysis spend.
-SOURCE_QUOTAS: dict[SourceKind, int] = {
-    SourceKind.CALENDAR: 5,
-    SourceKind.TIKTOK: 3,
-    SourceKind.GOOGLE_TRENDS: 2,
+# Daily cap on the number of moments to publish (and therefore the number
+# of friction-analysis LLM calls). 2026-06-06: dropped from 10 to 2 after
+# the dashboard filled with cross-day repeats — fewer, higher-signal
+# moments per day is a better demo than a wall of recurring trends.
+DAILY_MOMENT_LIMIT = 2
+
+# Tiebreak priority when multiple moments have similar scores. TikTok is
+# the most "live" signal (videos posted today), Google Trends is the next-
+# most live (searches today), Calendar is the fallback baseline.
+SOURCE_PRIORITY: dict[SourceKind, int] = {
+    SourceKind.TIKTOK: 0,
+    SourceKind.GOOGLE_TRENDS: 1,
+    SourceKind.CALENDAR: 2,
 }
 
 
 def _select_top_by_source_quota(
     moments: list[ExtractedMoment],
 ) -> list[ExtractedMoment]:
-    """Take SOURCE_QUOTAS[source] highest-scored moments per source.
+    """Pick DAILY_MOMENT_LIMIT moments, score desc with source-priority tiebreak.
 
     `moments` is pre-sorted by score desc (from stage_score_moments). We
-    walk it once, filling each source's quota as we go. Slots a source
-    can't fill (e.g. zero Google Trends moments today) are left empty,
-    not redistributed — keeps the math predictable and means a quiet
-    source doesn't accidentally drown the dashboard."""
-    quotas_left = dict(SOURCE_QUOTAS)
-    out: list[ExtractedMoment] = []
-    for m in moments:
-        remaining = quotas_left.get(m.source, 0)
-        if remaining > 0:
-            out.append(m)
-            quotas_left[m.source] = remaining - 1
-        if not any(v > 0 for v in quotas_left.values()):
-            break
-    return out
+    re-sort by (-score, source_priority) so a TikTok hashtag at the same
+    score as a calendar event wins. The cap keeps daily LLM spend predictable
+    and avoids dashboard duplication when many sources land on the same
+    recurring trend.
+    """
+    ranked = sorted(
+        moments,
+        key=lambda m: (-m.score, SOURCE_PRIORITY.get(m.source, 99)),
+    )
+    return ranked[:DAILY_MOMENT_LIMIT]
 
 
 async def stage_analyze_friction(
@@ -402,6 +401,50 @@ async def stage_analyze_friction(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _example_post_url_for(moment: ExtractedMoment) -> str | None:
+    """Build a clickable representative URL for the moment.
+
+    Hybrid strategy:
+      - TikTok hashtag → tiktok.com/tag/{name} (hashtag landing page; always real).
+      - Google Trends → first news_item URL when present in the signal metadata.
+      - Calendar → nothing here; calendar entries can supply URLs in YAML
+        once we want them (not wired yet).
+    Returns None when nothing usable is available.
+    """
+    if moment.source == SourceKind.TIKTOK:
+        hashtag = moment.name.lstrip("#").strip()
+        if hashtag:
+            return f"https://www.tiktok.com/tag/{hashtag}"
+        return None
+
+    if moment.source == SourceKind.GOOGLE_TRENDS and moment.signals:
+        for sig in moment.signals:
+            url = sig.metadata.get("news_url") or sig.metadata.get("url")
+            if url:
+                return str(url)
+    return None
+
+
+def _event_details_for(
+    moment: ExtractedMoment,
+    analysis: FrictionAnalysis | None,
+) -> str | None:
+    """Pick the best one-paragraph event description we have on hand.
+
+    Order of preference:
+      1. CalendarMoment.details (hand-curated in data/calendar.yaml).
+      2. Friction analysis self_rating_reasoning — for non-calendar moments
+         this is the closest thing the pipeline has to a "what is this event?"
+         summary without an extra LLM call.
+      3. The moment's own description (last resort, often duplicative).
+    """
+    if moment.calendar_entry and moment.calendar_entry.details:
+        return moment.calendar_entry.details
+    if analysis is not None and analysis.event_details:
+        return analysis.event_details
+    return moment.description or None
+
+
 async def stage_persist(
     today: date_t,
     results: list[
@@ -439,25 +482,63 @@ async def stage_persist(
 
         for moment, analysis, reused in results:
             try:
-                # Upsert moment row on (moment_date, name). Migration 0004 added
-                # the unique constraint so this is idempotent: re-runs replace
-                # the previous attempt for the same (date, name) tuple rather
-                # than duplicating rows.
+                # Persist routing:
+                #   - Reuse hit → REFRESH the existing source moment row in place
+                #     (bump moment_date to today, refresh signal_volume + details
+                #     + example_post_url). No new row is inserted. The dashboard
+                #     shows one row per trend, refreshed daily.
+                #   - No reuse → upsert a new moment row on (moment_date, name);
+                #     migration 0004's UNIQUE constraint keeps same-day idempotent.
+                moment_event_details = _event_details_for(moment, analysis)
+                moment_example_post_url = _example_post_url_for(moment)
+
+                if reused is not None and reused:
+                    moment_id = reused[0].source_moment_id
+                    refresh_payload: dict[str, object] = {
+                        "moment_date": today.isoformat(),
+                        "source": moment.source.value,
+                        "trend_velocity": float(moment.signal_volume),
+                        "prompt_version": version,
+                    }
+                    if moment.description:
+                        refresh_payload["description"] = moment.description
+                    if moment_event_details:
+                        refresh_payload["event_details"] = moment_event_details
+                    if moment_example_post_url:
+                        refresh_payload["example_post_url"] = moment_example_post_url
+                    try:
+                        client.table("moments").update(refresh_payload).eq(
+                            "id", moment_id
+                        ).execute()
+                    except Exception as exc:
+                        logger.warning(
+                            "persist: refresh-in-place failed for moment_id=%d (%r): %s",
+                            moment_id, moment.name, exc,
+                        )
+                        continue
+                    # Existing frictions/matches/playbook for this moment stay
+                    # in place — no LLM cost, no row churn. We skip the
+                    # friction-insert + matcher + influencer blocks below.
+                    succeeded += 1
+                    continue
+
+                moment_payload: dict[str, object] = {
+                    "moment_date": today.isoformat(),
+                    "name": moment.name,
+                    "source": moment.source.value,
+                    "description": moment.description,
+                    "trend_velocity": float(moment.signal_volume),  # v1 stand-in
+                    "purchase_intent": None,  # filled by LLM scoring in W3+
+                    "brand_risk": None,
+                    "prompt_version": version,
+                }
+                if moment_event_details:
+                    moment_payload["event_details"] = moment_event_details
+                if moment_example_post_url:
+                    moment_payload["example_post_url"] = moment_example_post_url
                 moment_resp = (
                     client.table("moments")
-                    .upsert(
-                        {
-                            "moment_date": today.isoformat(),
-                            "name": moment.name,
-                            "source": moment.source.value,
-                            "description": moment.description,
-                            "trend_velocity": float(moment.signal_volume),  # v1 stand-in
-                            "purchase_intent": None,  # filled by LLM scoring in W3+
-                            "brand_risk": None,
-                            "prompt_version": version,
-                        },
-                        on_conflict="moment_date,name",
-                    )
+                    .upsert(moment_payload, on_conflict="moment_date,name")
                     .execute()
                 )
                 if not moment_resp.data:
@@ -469,47 +550,11 @@ async def stage_persist(
                 # the schema takes care of the orphaned matches.
                 client.table("frictions").delete().eq("moment_id", moment_id).execute()
 
-                # Path A: reused frictions — copy from prior moment verbatim.
-                # Skip the friction LLM cost and ride the prior analysis's
-                # review_status (so an already-approved friction stays approved
-                # and immediately drives matcher/playbook; a pending one stays
-                # in the queue). Matches + playbook still regenerate via the
-                # backfill stage so catalog updates take effect.
-                reused_max_rating = 0
-                if reused is not None:
-                    for rf in reused:
-                        friction_resp = client.table("frictions").insert({
-                            "moment_id": moment_id,
-                            "friction_summary": rf.summary,
-                            "mechanism": rf.mechanism,
-                            "efficacy_class": rf.efficacy_class,
-                            "self_rating": rf.self_rating,
-                            "review_status": rf.review_status,
-                            "prompt_version": f"reused:{rf.source_prompt_version}",
-                        }).execute()
-                        if not friction_resp.data:
-                            continue
-                        friction_id = friction_resp.data[0]["id"]
-                        reused_max_rating = max(reused_max_rating, rf.self_rating)
-
-                        if rf.review_status == "approved":
-                            # Rebuild a FrictionItem so matcher has the shape it expects.
-                            from pipeline.schemas import FrictionItem
-                            await _persist_matches_for_friction(
-                                client,
-                                friction_id,
-                                FrictionItem(
-                                    summary=rf.summary,
-                                    mechanism=rf.mechanism,
-                                    efficacy_class=rf.efficacy_class,
-                                ),
-                                version,
-                            )
-
-                # Path B: fresh LLM analysis — insert as before.
+                # Fresh LLM analysis only — the reuse branch above already
+                # `continue`d, so we know analysis is the only source of truth here.
                 # Confidence gate: self_rating ≥ 7 → 'approved' (auto-publish),
                 # else 'pending' (queues for Yangcho).
-                elif analysis is not None:
+                if analysis is not None:
                     review_status = "approved" if analysis.self_rating >= 7 else "pending"
                     for f in analysis.frictions:
                         friction_resp = client.table("frictions").insert({
@@ -533,35 +578,10 @@ async def stage_persist(
 
                 # Per-moment playbook: influencer suggestions. Once per
                 # moment (not per friction — same moment, same audience).
-                # Fires when the moment has at least one approved friction,
-                # for both fresh (self_rating ≥ 7) and reused (any reused
-                # friction with review_status='approved') paths.
-                has_approved = (
-                    (analysis is not None and analysis.self_rating >= 7)
-                    or (reused is not None and any(rf.review_status == "approved" for rf in reused))
-                )
-                if has_approved:
-                    # Influencer needs a FrictionAnalysis-shaped object to
-                    # gather friction context. When reusing, synthesize one
-                    # from the reused list — same shape, no LLM round-trip.
-                    if analysis is not None:
-                        ctx_analysis = analysis
-                    else:
-                        from pipeline.schemas import FrictionAnalysis, FrictionItem
-                        ctx_analysis = FrictionAnalysis(
-                            frictions=[
-                                FrictionItem(
-                                    summary=rf.summary,
-                                    mechanism=rf.mechanism,
-                                    efficacy_class=rf.efficacy_class,
-                                )
-                                for rf in (reused or [])
-                            ],
-                            self_rating=reused_max_rating or 7,
-                            self_rating_reasoning="reused from prior moment",
-                        )
+                # Only fires when the moment has at least one approved friction.
+                if analysis is not None and analysis.self_rating >= 7:
                     await _persist_influencer_for_moment(
-                        client, moment_id, moment, ctx_analysis, version,
+                        client, moment_id, moment, analysis, version,
                     )
 
                 succeeded += 1
