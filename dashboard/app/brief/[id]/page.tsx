@@ -59,8 +59,20 @@ export default async function BriefDetailPage({
           {formatMomentDate(moment.moment_date)} · {momentSourceLabel(moment.source)}
         </p>
         <h1 className="mt-2 text-4xl font-semibold leading-tight">{moment.name}</h1>
-        {moment.description && (
-          <p className="mt-3 text-neutral-600 italic">{moment.description}</p>
+        {(moment.event_details || moment.description) && (
+          <p className="mt-3 text-neutral-700 leading-relaxed">
+            {moment.event_details || moment.description}
+          </p>
+        )}
+        {moment.example_post_url && (
+          <a
+            href={moment.example_post_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-4 inline-flex items-center gap-1 text-sm font-medium text-neutral-600 hover:text-neutral-900 underline underline-offset-2"
+          >
+            See an example post ↗
+          </a>
         )}
       </header>
 

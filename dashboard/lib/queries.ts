@@ -35,6 +35,8 @@ export interface PublicMoment {
   score: number | null;
   moment_date: string;
   created_at: string;
+  example_post_url: string | null;
+  event_details: string | null;
 }
 
 export interface PublicFriction {
@@ -78,7 +80,7 @@ export async function getLatestApprovedMoment(): Promise<{
   // 2) Fetch the moment row itself.
   const { data: momentData, error: momentErr } = await supabase
     .from("moments")
-    .select("id, name, source, description, trend_velocity, score, moment_date, created_at")
+    .select("id, name, source, description, trend_velocity, score, moment_date, created_at, example_post_url, event_details")
     .eq("id", latestMomentId)
     .limit(1);
 
@@ -164,7 +166,7 @@ export async function getBriefByMomentId(momentId: number): Promise<{
   // 1) The moment.
   const { data: momentData, error: momentErr } = await supabase
     .from("moments")
-    .select("id, name, source, description, trend_velocity, score, moment_date, created_at")
+    .select("id, name, source, description, trend_velocity, score, moment_date, created_at, example_post_url, event_details")
     .eq("id", momentId)
     .limit(1);
   if (momentErr || !momentData || momentData.length === 0) return null;
@@ -334,7 +336,7 @@ export async function getDashboardCards(): Promise<DashboardCard[]> {
   //    the "daily updating" feel of the dashboard).
   const { data: momentRows, error: momentErr } = await supabase
     .from("moments")
-    .select("id, name, source, description, trend_velocity, score, moment_date, created_at")
+    .select("id, name, source, description, trend_velocity, score, moment_date, created_at, example_post_url, event_details")
     .in("id", momentIds)
     .order("moment_date", { ascending: false })
     .order("created_at", { ascending: false });
@@ -484,7 +486,7 @@ export async function getAllApprovedMoments(): Promise<ArchiveEntry[]> {
   // 3) Fetch the moments themselves, newest first.
   const { data: momentRows, error: momentErr } = await supabase
     .from("moments")
-    .select("id, name, source, description, trend_velocity, score, moment_date, created_at")
+    .select("id, name, source, description, trend_velocity, score, moment_date, created_at, example_post_url, event_details")
     .in("id", momentIds)
     .order("moment_date", { ascending: false })
     .order("created_at", { ascending: false });
@@ -760,7 +762,7 @@ export async function getAllMomentsAdminPage(
   const { data: momentRows, error, count } = await supabase
     .from("moments")
     .select(
-      "id, name, source, description, trend_velocity, score, moment_date, created_at",
+      "id, name, source, description, trend_velocity, score, moment_date, created_at, example_post_url, event_details",
       { count: "exact" },
     )
     .order("created_at", { ascending: false })
@@ -980,7 +982,7 @@ export async function getAllMomentsAdmin(): Promise<AdminMomentEntry[]> {
 
   const { data: momentRows, error: momentErr } = await supabase
     .from("moments")
-    .select("id, name, source, description, trend_velocity, score, moment_date, created_at")
+    .select("id, name, source, description, trend_velocity, score, moment_date, created_at, example_post_url, event_details")
     .order("created_at", { ascending: false })
     .limit(200);
   if (momentErr || !momentRows) return [];

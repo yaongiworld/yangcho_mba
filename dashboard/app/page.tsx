@@ -140,6 +140,9 @@ function MomentCard({ card }: { card: DashboardCard }) {
 
 function MomentHeader({ moment }: { moment: PublicMoment }) {
   const sourceLabel = momentSourceLabel(moment.source);
+  // Prefer the longer-form event_details; fall back to the source description
+  // (often a one-liner from the ingest signal).
+  const detail = moment.event_details || moment.description;
   return (
     <header className="px-5 pt-5 pb-4">
       <div className="flex items-center justify-between gap-3 text-xs uppercase tracking-wide text-neutral-500 mb-2">
@@ -149,10 +152,20 @@ function MomentHeader({ moment }: { moment: PublicMoment }) {
       <h2 className="text-lg font-semibold leading-snug text-neutral-900">
         {moment.name}
       </h2>
-      {moment.description && (
-        <p className="mt-2 text-sm text-neutral-600 italic line-clamp-2">
-          {moment.description}
+      {detail && (
+        <p className="mt-2 text-sm text-neutral-600 leading-relaxed line-clamp-3">
+          {detail}
         </p>
+      )}
+      {moment.example_post_url && (
+        <a
+          href={moment.example_post_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-neutral-600 hover:text-neutral-900 underline underline-offset-2"
+        >
+          See an example post ↗
+        </a>
       )}
     </header>
   );

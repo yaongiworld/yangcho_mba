@@ -117,9 +117,9 @@ function ArchiveRow({ entry }: { entry: ArchiveEntry }) {
         <p className="mt-2 text-lg font-semibold leading-snug group-hover:underline">
           {moment.name}
         </p>
-        {moment.description && (
-          <p className="mt-1 text-sm text-neutral-600 italic line-clamp-2">
-            {moment.description}
+        {(moment.event_details || moment.description) && (
+          <p className="mt-1 text-sm text-neutral-600 leading-snug line-clamp-2">
+            {moment.event_details || moment.description}
           </p>
         )}
       </Link>
