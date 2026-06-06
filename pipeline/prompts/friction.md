@@ -36,7 +36,9 @@ You will be shown three case studies that demonstrate the right voice and depth.
 
 ## Your task
 
-Identify 1–3 environmental and behavioral frictions this moment places on skin. For each friction, explain the mechanism in R&D terms (rheology, lipid biology, surfactant chemistry, barrier function, inflammation cascade — whatever applies). Then assign each friction to an efficacy class.
+First, write a brief plain-English event detail: 1–3 sentences answering "what is this event/trend, where does it happen, and when?" — for the non-expert dashboard reader who may never have heard of it. Stick to public facts. No skincare interpretation here; just the cultural context.
+
+Then identify 1–3 environmental and behavioral frictions this moment places on skin. For each friction, explain the mechanism in R&D terms (rheology, lipid biology, surfactant chemistry, barrier function, inflammation cascade — whatever applies). Then assign each friction to an efficacy class.
 
 After the friction analysis, rate your own confidence in the analysis on a 1–10 scale. Be honest. Confidence drives whether this analysis auto-publishes or queues for human review. A self-rating of 8+ signals that another R&D scientist would broadly agree with your mechanism reasoning.
 
@@ -46,6 +48,7 @@ Return ONLY a JSON object, no prose before or after, no markdown fences. The sha
 
 ```json
 {
+  "event_details": "string — 1–3 plain-English sentences describing what this event/trend is, where (if applicable), and when. Aimed at a dashboard reader who may never have heard of it.",
   "frictions": [
     {
       "summary": "string — one-line friction observation in plain language",

@@ -312,6 +312,7 @@ def moments_for(today: date | None = None, *, path: Path | None = None) -> list[
                     friction_hints=entry.get("friction_hints", []),
                     keywords=entry.get("keywords", []),
                     category=category,
+                    details=entry.get("details"),
                 )
             )
     return out

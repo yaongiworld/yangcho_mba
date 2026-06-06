@@ -90,6 +90,10 @@ class CalendarMoment(BaseModel):
     friction_hints: list[str] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
     category: str  # nfl | bama_rush | marathons | festivals | evergreen
+    # Optional 1–3 sentence human-readable event detail surfaced in the
+    # dashboard. Only populated for calendar moments where Tony has filled
+    # it in; non-calendar moments get this filled by the friction prompt.
+    details: str | None = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -168,6 +172,8 @@ class MomentInsert(BaseModel):
     purchase_intent: int | None = Field(default=None, ge=1, le=5)
     brand_risk: int | None = Field(default=None, ge=1, le=5)
     prompt_version: str
+    example_post_url: str | None = None
+    event_details: str | None = None
 
 
 class MomentRow(MomentInsert):
@@ -193,6 +199,10 @@ class FrictionAnalysis(BaseModel):
     """The shape returned by call_llm("friction", ...) — what the LLM produces.
     Each item maps to one row in the frictions table."""
 
+    # 1–3 sentence plain-English description of the underlying event/trend.
+    # Surfaces in dashboard MomentCard.event_details. Default empty so older
+    # cached / test fixtures without this field still validate.
+    event_details: str = ""
     frictions: list[FrictionItem] = Field(min_length=1, max_length=3)
     self_rating: int = Field(ge=1, le=10)
     self_rating_reasoning: str
