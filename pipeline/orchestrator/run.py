@@ -445,6 +445,95 @@ def _event_details_for(
     return moment.description or None
 
 
+def _needs_enrichment(current_details: str | None, current_url: str | None) -> bool:
+    """A row "needs enrichment" when either field is missing OR the details
+    are obviously friction-hint slag (the legacy " / "-joined string we used
+    to write before event_details existed).
+
+    Conservative — we only re-fire enrichment when the dashboard would visibly
+    suffer from leaving the row as-is.
+    """
+    if not current_details or not current_url:
+        return True
+    # Heuristic: legacy friction-hint joins contain " / " separators and
+    # never contain a full sentence. Real event descriptions have periods.
+    if " / " in current_details and "." not in current_details:
+        return True
+    return False
+
+
+async def _enrich_moment_if_needed(
+    client,
+    moment_id: int,
+    moment: ExtractedMoment,
+    analysis: FrictionAnalysis | None,
+    reused: list[ReusableFriction] | None,
+) -> None:
+    """Best-effort grounded Gemini call to fill event_details + example_post_url.
+
+    Fires only when the row needs it AND the moment is publishable (has at
+    least one approved friction — fresh or reused). Failures are logged and
+    swallowed; the dashboard render path tolerates null fields.
+    """
+    from pipeline.analysis.moment_enrichment import (
+        MomentEnrichmentInput, enrich_moment,
+    )
+
+    try:
+        existing = (
+            client.table("moments")
+            .select("event_details, example_post_url")
+            .eq("id", moment_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        logger.warning("enrich: existing-row read failed for moment_id=%d: %s", moment_id, exc)
+        return
+    if not existing:
+        return
+
+    cur_details = existing[0].get("event_details")
+    cur_url = existing[0].get("example_post_url")
+    if not _needs_enrichment(cur_details, cur_url):
+        return
+
+    # Build a friction context string from whichever side has data.
+    if analysis is not None:
+        friction_context = " ".join(f.summary for f in analysis.frictions)
+    elif reused is not None:
+        friction_context = " ".join(rf.summary for rf in reused)
+    else:
+        friction_context = moment.description or ""
+
+    details, url = await enrich_moment(
+        MomentEnrichmentInput(
+            moment_name=moment.name,
+            source=moment.source.value,
+            description=moment.description,
+            friction_context=friction_context,
+        )
+    )
+
+    payload: dict[str, object] = {}
+    if details and (not cur_details or _needs_enrichment(cur_details, "x")):
+        payload["event_details"] = details
+    if url and not cur_url:
+        payload["example_post_url"] = url
+    if not payload:
+        return
+    try:
+        client.table("moments").update(payload).eq("id", moment_id).execute()
+        logger.info(
+            "enrich: filled moment_id=%d fields=%s",
+            moment_id, list(payload.keys()),
+        )
+    except Exception as exc:
+        logger.warning("enrich: update failed for moment_id=%d: %s", moment_id, exc)
+
+
 async def stage_persist(
     today: date_t,
     results: list[
@@ -519,6 +608,13 @@ async def stage_persist(
                     # Existing frictions/matches/playbook for this moment stay
                     # in place — no LLM cost, no row churn. We skip the
                     # friction-insert + matcher + influencer blocks below.
+                    # Enrichment fires only if the moment is missing details
+                    # / example URL — older rows analyzed before those fields
+                    # existed get filled in here on their first refresh.
+                    if any(rf.review_status == "approved" for rf in reused):
+                        await _enrich_moment_if_needed(
+                            client, moment_id, moment, None, reused,
+                        )
                     succeeded += 1
                     continue
 
@@ -582,6 +678,12 @@ async def stage_persist(
                 if analysis is not None and analysis.self_rating >= 7:
                     await _persist_influencer_for_moment(
                         client, moment_id, moment, analysis, version,
+                    )
+                    # Enrichment — same gate as influencer (publishable moments
+                    # only). Fills example_post_url + upgrades event_details
+                    # from grounded search when missing or thin.
+                    await _enrich_moment_if_needed(
+                        client, moment_id, moment, analysis, None,
                     )
 
                 succeeded += 1
